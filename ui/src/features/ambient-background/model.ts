@@ -1,4 +1,54 @@
-import { AnimationMixer, Box3, Mesh, Vector3, type AnimationClip, type Object3D } from 'three'
+import { AnimationMixer, Box3, Mesh, Texture, Vector3, type AnimationClip, type Object3D } from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+
+export async function loadModel(bytes: ArrayBuffer, signal: AbortSignal) {
+  const bitmaps = new Set<ImageBitmap>()
+  let released = false
+  function closeImages() {
+    released = true
+    for (const bitmap of bitmaps) bitmap.close()
+    bitmaps.clear()
+  }
+
+  const loader = new GLTFLoader().register(parser => {
+    const loadImageSource = parser.loadImageSource.bind(parser)
+    const embedded = new Map<number, Promise<Texture>>()
+    parser.loadImageSource = (index, imageLoader) => {
+      const source: { bufferView?: number; mimeType?: string } = parser.json.images[index]
+      if (source.bufferView === undefined) return loadImageSource(index, imageLoader)
+      const cached = embedded.get(index)
+      if (cached) return cached.then(texture => texture.clone())
+
+      // Decode the GLB buffer directly. The local UI does not allow blob URL requests.
+      const pending = parser.getDependency('bufferView', source.bufferView).then(async (data: ArrayBuffer) => {
+        const bitmap = await createImageBitmap(new Blob([data], { type: source.mimeType }), {
+          colorSpaceConversion: 'none',
+          premultiplyAlpha: 'none',
+        })
+        if (released || signal.aborted) {
+          bitmap.close()
+          throw new Error('Model image decoding canceled')
+        }
+        bitmaps.add(bitmap)
+        const texture = new Texture(bitmap)
+        texture.needsUpdate = true
+        return texture
+      })
+      embedded.set(index, pending)
+      return pending
+    }
+    return { name: 'embedded-model-images' }
+  })
+
+  try {
+    const model = await loader.parseAsync(bytes, '')
+    signal.throwIfAborted()
+    return { model, closeImages }
+  } catch (error) {
+    closeImages()
+    throw error
+  }
+}
 
 export function fitModel(root: Object3D, maxRadius: number, idle?: AnimationClip) {
   const bounds = new Box3()

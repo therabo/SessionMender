@@ -1,14 +1,13 @@
 import {
   AnimationMixer, DirectionalLight, Group, HemisphereLight, MathUtils, Mesh,
-  MeshStandardMaterial, NeutralToneMapping, PerspectiveCamera, Scene, SkinnedMesh, SphereGeometry, Vector3, WebGLRenderer,
+  MeshStandardMaterial, NeutralToneMapping, PerspectiveCamera, Scene, SkinnedMesh, SphereGeometry, Texture, Vector3, WebGLRenderer,
   type BufferGeometry, type Material, type Object3D, type Skeleton,
 } from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { clone } from 'three/addons/utils/SkeletonUtils.js'
 import { advanceBubble, createBubbleMotion, motionStep } from './bubbleMotion'
 import { depths, profiles, type SceneConfig } from './config'
 import { glass } from './glass'
-import { fitModel } from './model'
+import { fitModel, loadModel } from './model'
 
 export { scenes } from './config'
 
@@ -22,23 +21,31 @@ export type BubbleScene = {
 export async function createScene(
   host: HTMLElement, bytes: ArrayBuffer, config: SceneConfig, signal: AbortSignal, onLost: () => void,
 ): Promise<BubbleScene> {
-  // Both pinned models are self-contained and need no decoders or texture requests.
-  const model = await new GLTFLoader().parseAsync(bytes, '')
-  signal.throwIfAborted()
+  const { model, closeImages } = await loadModel(bytes, signal)
 
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('webgl2', { alpha: true, antialias: true, powerPreference: 'low-power' })
-  if (!context) throw new Error('WebGL2 unavailable')
+  if (!context) {
+    closeImages()
+    throw new Error('WebGL2 unavailable')
+  }
   const gl = context
 
   const geometries = new Set<BufferGeometry>()
   const materials = new Set<Material>()
+  const textures = new Set<Texture>()
   const skeletons = new Set<Skeleton>()
   function collect(root: Object3D) {
     root.traverse(object => {
       if (!(object instanceof Mesh)) return
       geometries.add(object.geometry)
-      for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material)
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        if (materials.has(material)) continue
+        materials.add(material)
+        for (const value of Object.values(material)) {
+          if (value instanceof Texture) textures.add(value)
+        }
+      }
       if (object instanceof SkinnedMesh) skeletons.add(object.skeleton)
     })
   }
@@ -82,6 +89,8 @@ export async function createScene(
     scene.clear()
     for (const skeleton of skeletons) skeleton.dispose()
     for (const geometry of geometries) geometry.dispose()
+    for (const texture of textures) texture.dispose()
+    closeImages()
     for (const material of materials) material.dispose()
     renderer?.dispose()
     if (!gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext()
@@ -115,7 +124,7 @@ export async function createScene(
     const surface = config.model.defaultSurface
     if (surface) {
       for (const material of materials) {
-        if (material instanceof MeshStandardMaterial) {
+        if (material instanceof MeshStandardMaterial && model.parser.associations.get(material)?.materials === undefined) {
           material.roughness = surface.roughness
           material.metalness = surface.metalness
         }
@@ -143,10 +152,6 @@ export async function createScene(
         collect(avatar)
         avatar.scale.setScalar(fit)
         avatar.position.copy(center).multiplyScalar(-fit)
-        if (config.model.facingYaw) {
-          avatar.rotateY(config.model.facingYaw)
-          avatar.position.applyQuaternion(avatar.quaternion)
-        }
         avatar.traverse(object => {
           if (object instanceof SkinnedMesh) object.frustumCulled = false
         })

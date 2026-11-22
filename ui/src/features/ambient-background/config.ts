@@ -34,7 +34,6 @@ export type SceneConfig = {
   model: {
     maxRadius: number
     idle?: string
-    facingYaw?: number
     defaultSurface?: { roughness: number; metalness: number }
   }
   exposure: number
@@ -96,8 +95,7 @@ export const scenes: Record<Provider, SceneConfig> = {
     ],
     motionSeed: 40,
     motionPhase: 37,
-    // The terminal faces -Z. The GLB supplies vertex colors and no authored material.
-    model: { maxRadius: 0.76, facingYaw: Math.PI, defaultSurface: { roughness: 0.78, metalness: 0.04 } },
+    model: { maxRadius: 0.76, defaultSurface: { roughness: 0.78, metalness: 0.04 } },
     exposure: 0.93,
     hemisphere: ['#e6f5ff', '#315c8a', 1.65],
     lights: [
