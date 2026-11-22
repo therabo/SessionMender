@@ -1,10 +1,18 @@
 //! Bounded read observations, never provider writes. Not an atomic snapshot.
 use crate::{ProviderError, io_error};
-use std::{
-    fs,
-    io::Read,
-    path::{Component, Path},
-};
+#[cfg(not(windows))]
+use std::path::Component;
+use std::{fs, io::Read, path::Path};
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows;
+#[cfg(windows)]
+pub(crate) use windows::open_registered_executable;
+#[cfg(windows)]
+pub use windows::rewrite::{DirectoryLock, directory, open_file, replace};
+#[cfg(windows)]
+pub use windows::{Directory, Identity, Item, canonical_local_path};
 
 /// Detect Windows junctions and other reparse points as well as Unix symlinks.
 pub fn is_link(metadata: &fs::Metadata) -> bool {
@@ -22,6 +30,7 @@ pub fn is_link(metadata: &fs::Metadata) -> bool {
 /// Read a regular file only after checking every relative component and root scope.
 /// No transcript body is logged. Concurrent writers can still invalidate observations;
 /// no future ownership or mutation decision may rely on these path checks alone.
+#[cfg(not(windows))]
 fn open_regular(root: &Path, path: &Path) -> Result<fs::File, ProviderError> {
     let relative = path
         .strip_prefix(root)
@@ -68,12 +77,6 @@ fn open_regular(root: &Path, path: &Path) -> Result<fs::File, ProviderError> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // FILE_FLAG_OPEN_REPARSE_POINT: open the final object rather than its target.
-        options.custom_flags(0x00200000);
-    }
     let file = options.open(path).map_err(|e| io_error(path, e))?;
     let before = file.metadata().map_err(|e| io_error(path, e))?;
     if !before.is_file() || is_link(&before) {
@@ -82,6 +85,13 @@ fn open_regular(root: &Path, path: &Path) -> Result<fs::File, ProviderError> {
         ));
     }
     Ok(file)
+}
+
+#[cfg(windows)]
+fn open_regular(root: &Path, path: &Path) -> Result<fs::File, ProviderError> {
+    Directory::open(root)
+        .and_then(|directory| directory.open_read(path))
+        .map_err(|error| io_error(path, error))
 }
 
 pub fn read_bounded(root: &Path, path: &Path, max_bytes: usize) -> Result<Vec<u8>, ProviderError> {
@@ -134,6 +144,7 @@ pub fn windows_directory_identity(path: &Path) -> std::io::Result<(u64, u64)> {
 /// traversal. Windows checks all ancestors and opens the leaf without following
 /// a reparse point. Callers must revalidate the observation before reuse.
 pub fn open_observed_read(root: &Path, path: &Path) -> Result<fs::File, ProviderError> {
+    #[cfg(not(windows))]
     if !path.starts_with(root) || !path.is_absolute() {
         return Err(ProviderError::InvalidScope(
             "read outside observation root".into(),
@@ -152,27 +163,7 @@ pub fn open_observed_read(root: &Path, path: &Path) -> Result<fs::File, Provider
         }
         Ok(file)
     }
-    #[cfg(windows)]
-    {
-        for ancestor in root.ancestors() {
-            let metadata = fs::symlink_metadata(ancestor).map_err(|e| io_error(ancestor, e))?;
-            if is_link(&metadata) || !metadata.is_dir() {
-                return Err(ProviderError::InvalidScope(
-                    "linked observation root".into(),
-                ));
-            }
-        }
-        let identity = windows_directory_identity(root).map_err(|e| io_error(root, e))?;
-        let file = open_regular(root, path)?;
-        let (volume, _) = windows_file_identity(&file).map_err(|e| io_error(path, e))?;
-        if volume != identity.0 || windows_directory_identity(root).ok() != Some(identity) {
-            return Err(ProviderError::InvalidScope(
-                "observation root or volume changed".into(),
-            ));
-        }
-        Ok(file)
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     open_regular(root, path)
 }
 
@@ -227,7 +218,22 @@ pub fn open_source_read(root: &Path, path: &Path) -> Result<fs::File, ProviderEr
         }
         Ok(file)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        Directory::open(root)
+            .and_then(|directory| directory.open_read(path))
+            .map_err(|error| {
+                ProviderError::CapabilityUnavailable(
+                    match error.kind() {
+                        std::io::ErrorKind::NotFound => "source file missing",
+                        std::io::ErrorKind::PermissionDenied => "source read permission denied",
+                        _ => "source file linked, changed, or unavailable",
+                    }
+                    .into(),
+                )
+            })
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (root, path);
         Err(ProviderError::CapabilityUnavailable(

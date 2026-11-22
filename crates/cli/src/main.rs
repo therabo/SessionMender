@@ -41,11 +41,23 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Action {
-    /// Open the local session manager in the default browser.
+    /// Open the local session manager in a browser.
     Ui {
         /// Print the launch URL for manual opening.
         #[arg(long)]
         no_open: bool,
+        /// Open the private launch URL with this browser executable.
+        #[arg(long, value_parser = absolute_path, conflicts_with = "no_open")]
+        browser_executable: Option<PathBuf>,
+    },
+    /// Reconcile Codex Desktop entries for UUIDs already removed from the archive.
+    #[cfg(windows)]
+    ReconcileDesktop {
+        /// Confirm the cleanup of the specified Desktop entries.
+        #[arg(long, required = true)]
+        confirm: bool,
+        #[arg(required = true, value_parser = protected_uuid)]
+        sessions: Vec<String>,
     },
 }
 
@@ -240,7 +252,6 @@ fn native_claude_desktop(home: &std::path::Path) -> (Vec<DesktopContext>, Vec<In
 }
 
 fn run(args: Args) -> Result<(), String> {
-    let Action::Ui { no_open } = args.command;
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
@@ -253,6 +264,31 @@ fn run(args: Args) -> Result<(), String> {
         args.codex_executable.clone(),
     )?;
     let codex = CodexAdapter::new(discovery.location.clone(), helper, home.clone());
+    #[cfg(not(windows))]
+    let Action::Ui {
+        no_open,
+        ref browser_executable,
+    } = args.command;
+    #[cfg(windows)]
+    let (no_open, browser_executable) = match args.command {
+        Action::Ui {
+            no_open,
+            ref browser_executable,
+        } => (no_open, browser_executable),
+        #[cfg(windows)]
+        Action::ReconcileDesktop {
+            confirm: true,
+            ref sessions,
+        } => {
+            codex.reconcile_removed_desktop_sessions(sessions, &args.protect_codex_session)?;
+            println!("Verified Codex Desktop catalog entries reconciled.");
+            return Ok(());
+        }
+        #[cfg(windows)]
+        Action::ReconcileDesktop { confirm: false, .. } => {
+            return Err("Pass --confirm to reconcile the specified Desktop entries.".into());
+        }
+    };
     let claude = claude_adapter(&args, &home)?;
     ui::run(ui::Configuration {
         codex,
@@ -262,6 +298,7 @@ fn run(args: Args) -> Result<(), String> {
         limit: args.max_entries as usize,
         protected: args.protect_codex_session,
         no_open,
+        browser_executable: browser_executable.clone(),
     })
 }
 

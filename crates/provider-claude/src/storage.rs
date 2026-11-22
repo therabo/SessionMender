@@ -16,11 +16,11 @@ use std::{
     time::Instant,
 };
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub const REMOVAL_NOTICE: &str =
     "L’anteprima della sessione mostra i file interessati dall’eliminazione.";
-#[cfg(not(target_os = "macos"))]
-pub const REMOVAL_NOTICE: &str = "Eliminazione Claude disponibile su macOS.";
+#[cfg(not(any(target_os = "macos", windows)))]
+pub const REMOVAL_NOTICE: &str = "Eliminazione Claude non disponibile su questa piattaforma.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

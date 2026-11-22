@@ -9,20 +9,30 @@ use std::{
 };
 use uuid::Uuid;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct DeletionPlan {
     #[serde(skip)]
     root: PathBuf,
     trees: Vec<Tree>,
+    #[serde(skip)]
+    protected: Vec<String>,
+    #[cfg(windows)]
+    #[serde(skip)]
+    root_identity: agentmender_provider_api::filesystem::Identity,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 struct Tree {
     id: Uuid,
     descendants: Vec<Descendant>,
+    #[serde(skip)]
+    archived: bool,
+    #[cfg(windows)]
+    #[serde(skip)]
+    rollouts: BTreeMap<Uuid, BTreeMap<PathBuf, String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 struct Descendant {
     id: Uuid,
     parent: Uuid,
@@ -35,6 +45,7 @@ struct Descendant {
 pub struct Deletion {
     pub native_succeeded: usize,
     pub verified_absent: usize,
+    pub requested_absent: bool,
     pub messages: Vec<String>,
     pub errors: Vec<String>,
 }
@@ -45,6 +56,8 @@ struct Node {
     present: bool,
     archived: bool,
     uncertain: bool,
+    #[cfg(windows)]
+    rollouts: BTreeMap<PathBuf, String>,
 }
 
 #[derive(Default)]
@@ -73,6 +86,12 @@ impl Archive {
                     archive.children.entry(parent).or_default().insert(child);
                 }
                 LineageFact::Uncertain(id) => archive.nodes.entry(id).or_default().uncertain = true,
+                #[cfg(windows)]
+                LineageFact::Rollout { id, path, revision } => {
+                    let node = archive.nodes.entry(id).or_default();
+                    node.rollouts.insert(path, revision);
+                    node.uncertain |= node.rollouts.len() > 1;
+                }
             }
         }
         archive
@@ -121,7 +140,28 @@ impl Archive {
                 pending.push((child, depth + 1));
             }
         }
-        Ok(Tree { id, descendants })
+        Ok(Tree {
+            id,
+            archived: root.archived,
+            #[cfg(windows)]
+            rollouts: seen
+                .into_iter()
+                .map(|id| (id, self.nodes[&id].rollouts.clone()))
+                .collect(),
+            descendants,
+        })
+    }
+
+    fn rollout_changed(&self, node: &Node, tree: &Tree, id: Uuid) -> bool {
+        #[cfg(windows)]
+        return node.rollouts.iter().any(|(path, revision)| {
+            tree.rollouts.get(&id).and_then(|entries| entries.get(path)) != Some(revision)
+        });
+        #[cfg(not(windows))]
+        {
+            let _ = (node, tree, id);
+            false
+        }
     }
 
     // A reviewed node can still be addressed if native deletion already erased
@@ -141,6 +181,7 @@ impl Archive {
                 node.uncertain
                     || (!was_present && node.present)
                     || node.parents.iter().any(|found| Some(*found) != parent)
+                    || self.rollout_changed(node, tree, id)
             }) {
                 blocked.insert(id);
                 changes.insert(format!(
@@ -177,10 +218,14 @@ impl CodexAdapter {
     fn archive(&self) -> Result<Archive, String> {
         self.lineage()
             .map(Archive::from_facts)
-            .map_err(|_| "Impossibile verificare il grafo o leggere l’archivio Codex.".into())
+            .map_err(|error| format!("Grafo o archivio Codex non verificabile: {error}"))
     }
 
     fn selected_root(&self) -> Result<PathBuf, String> {
+        #[cfg(windows)]
+        return crate::discovery::verified_read_root(&self.location.state_root)
+            .map_err(|error| error.to_string());
+        #[cfg(not(windows))]
         self.location
             .state_root
             .canonicalize()
@@ -193,6 +238,9 @@ impl CodexAdapter {
         protected: &[String],
     ) -> Result<DeletionPlan, String> {
         let root = self.selected_root()?;
+        #[cfg(windows)]
+        let directory = agentmender_provider_api::filesystem::Directory::open(&root)
+            .map_err(|error| error.to_string())?;
         let ids = sessions
             .iter()
             .map(|identity| {
@@ -210,19 +258,72 @@ impl CodexAdapter {
             return Err("Nessuna sessione Codex da eliminare.".into());
         }
         let archive = self.archive()?;
-        let protected = protected
+        let protected_ids = protected
             .iter()
             .filter_map(|id| Uuid::parse_str(id).ok())
             .collect();
         let trees = ids
             .into_iter()
-            .map(|id| archive.tree(id, &protected))
+            .map(|id| archive.tree(id, &protected_ids))
             .collect::<Result<_, _>>()?;
-        Ok(DeletionPlan { root, trees })
+        Ok(DeletionPlan {
+            root,
+            trees,
+            protected: protected.to_vec(),
+            #[cfg(windows)]
+            root_identity: directory.item().identity,
+        })
+    }
+
+    pub fn native_removal_reason(&self) -> Option<&'static str> {
+        #[cfg(not(any(target_os = "macos", windows)))]
+        return Some("Rimozione Codex non disponibile su questa piattaforma.");
+        #[cfg(any(target_os = "macos", windows))]
+        {
+            let Some(executable) = self
+                .location
+                .executable
+                .as_ref()
+                .filter(|path| path.is_file())
+            else {
+                return Some("Eseguibile Codex non disponibile.");
+            };
+            #[cfg(windows)]
+            if process::codex_delete_version(executable).is_err() {
+                return Some("Versione o comando delete --force del CLI Codex non verificabile.");
+            }
+            #[cfg(target_os = "macos")]
+            let _ = executable;
+            None
+        }
     }
 
     pub fn delete_reviewed(&self, plan: DeletionPlan) -> Result<Deletion, String> {
-        let _deletion = self.deletion.lock().expect("Codex deletion");
+        let _deletion = self
+            .deletion
+            .lock()
+            .map_err(|_| "Eliminazione Codex non disponibile.")?;
+        if let Some(reason) = self.native_removal_reason() {
+            return Err(reason.into());
+        }
+        #[cfg(windows)]
+        let _directory = agentmender_provider_api::filesystem::Directory::open(&plan.root)
+            .map_err(|error| error.to_string())?;
+        let identities: Vec<_> = plan
+            .trees
+            .iter()
+            .map(|tree| SessionIdentity {
+                provider: ProviderKind::Codex,
+                state_root: plan.root.clone(),
+                namespace: None,
+                native_id: tree.id.to_string(),
+            })
+            .collect();
+        if self.deletion_plan(&identities, &plan.protected)? != plan {
+            return Err(
+                "L’archivio o le relazioni sono cambiati. Apri una nuova anteprima Codex.".into(),
+            );
+        }
         let executable = self
             .location
             .executable
@@ -243,6 +344,49 @@ impl CodexAdapter {
             self.archive()
         }))
     }
+
+    /// Repair Desktop projections for explicitly selected, already absent UUIDs.
+    #[cfg(windows)]
+    pub fn reconcile_removed_desktop_sessions(
+        &self,
+        ids: &[String],
+        protected: &[String],
+    ) -> Result<(), String> {
+        let _deletion = self
+            .deletion
+            .lock()
+            .map_err(|_| "Riconciliazione Codex non disponibile.")?;
+        let root = self.selected_root()?;
+        let _directory = agentmender_provider_api::filesystem::Directory::open(&root)
+            .map_err(|error| error.to_string())?;
+        let ids: BTreeSet<_> = ids.iter().collect();
+        if ids.is_empty() {
+            return Err("Specificare almeno un UUID Codex da riconciliare.".into());
+        }
+        let archive = self.archive()?;
+        for &id in &ids {
+            if !canonical_uuid(id) {
+                return Err("UUID Codex non valido.".into());
+            }
+            let uuid = Uuid::parse_str(id).map_err(|error| error.to_string())?;
+            if protected.contains(id) || archive.present(uuid) {
+                return Err(format!(
+                    "{id}: sessione protetta, presente o non verificabile."
+                ));
+            }
+        }
+        let mut errors = Vec::new();
+        for id in ids {
+            let mut failures = Vec::new();
+            crate::desktop_reconciliation::remove_local_thread(&root, id, &mut failures);
+            errors.extend(failures.into_iter().map(|error| format!("{id}: {error}")));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("\n"))
+        }
+    }
 }
 
 fn waiting_for_children(error: &str) -> bool {
@@ -259,147 +403,164 @@ fn delete(
     observe: impl Fn() -> Result<Archive, String>,
 ) -> Deletion {
     let mut outcome = Deletion::default();
-    let mut attempted = Vec::new();
-    let mut native_successes = BTreeMap::new();
-    let mut run_native = |id| {
-        let message = native(id)?;
-        native_successes.insert(id, message);
-        Ok::<_, String>(())
-    };
+    let mut targets = BTreeSet::new();
+    let mut changes = BTreeSet::new();
+    let mut messages = BTreeMap::new();
+    let mut archive = observe().map_err(|error| outcome.errors.push(error)).ok();
     for tree in &plan.trees {
-        match run_native(tree.id) {
-            Ok(()) => attempted.push((tree, None)),
+        let Some(current) = archive.as_ref() else {
+            break;
+        };
+        if current.tree(tree.id, &BTreeSet::new()).ok().as_ref() != Some(tree) {
+            outcome.errors.push(format!(
+                "{}: sessione o discendenza cambiata dopo l’anteprima.",
+                tree.id
+            ));
+            break;
+        }
+        targets.insert(tree.id);
+        targets.extend(
+            tree.descendants
+                .iter()
+                .filter(|child| child.present)
+                .map(|child| child.id),
+        );
+        let removal = run_native(tree.id, &native, &observe, &mut outcome, &mut archive);
+        let refusal = match removal {
+            Ok(message) => {
+                messages.insert(tree.id, message);
+                None
+            }
             Err(error)
-                if tree.descendants.iter().any(|child| child.present)
-                    && waiting_for_children(&error) =>
+                if waiting_for_children(&error)
+                    && tree.descendants.iter().any(|child| child.present) =>
             {
-                attempted.push((tree, Some(error)));
+                Some(error)
             }
             Err(error) => {
                 outcome.errors.push(format!("{}: {error}", tree.id));
                 break;
             }
+        };
+        for child in tree.descendants.iter().rev().filter(|child| child.present) {
+            let Some(current) = archive.as_ref() else {
+                break;
+            };
+            let blocked = current.blocked_writes(tree, &mut changes);
+            if current.present(child.id)
+                && !blocked.contains(&child.id)
+                && let Err(error) =
+                    run_native(child.id, &native, &observe, &mut outcome, &mut archive)
+            {
+                outcome.errors.push(format!("{}: {error}", child.id));
+            }
         }
-    }
-    if attempted.is_empty() {
-        return outcome;
-    }
-
-    let targets: BTreeSet<_> = attempted
-        .iter()
-        .flat_map(|(tree, _)| {
-            std::iter::once(tree.id).chain(
-                tree.descendants
-                    .iter()
-                    .filter(|child| child.present)
-                    .map(|child| child.id),
-            )
-        })
-        .collect();
-    let mut verified_absent = BTreeSet::new();
-    let mut changes = BTreeSet::new();
-    let mut verify = |errors: &mut Vec<String>| match observe() {
-        Ok(archive) => {
-            verified_absent = targets
-                .iter()
-                .copied()
-                .filter(|id| !archive.present(*id))
-                .collect();
-            Some(archive)
-        }
-        Err(error) => {
-            errors.push(error);
-            None
-        }
-    };
-
-    let mut archive = verify(&mut outcome.errors);
-    if let Some(observed) = &archive {
-        let mut residuals_attempted = false;
-        for (tree, _) in &attempted {
-            let blocked = observed.blocked_writes(tree, &mut changes);
-            for child in tree.descendants.iter().rev() {
-                if child.present && observed.present(child.id) && !blocked.contains(&child.id) {
-                    residuals_attempted = true;
-                    if let Err(error) = run_native(child.id) {
-                        outcome.errors.push(format!("{}: {error}", child.id));
+        if let Some(error) = refusal {
+            match archive.as_ref() {
+                Some(current) if !current.present(tree.id) => {}
+                Some(current)
+                    if !current
+                        .blocked_writes(tree, &mut changes)
+                        .contains(&tree.id)
+                        && tree
+                            .descendants
+                            .iter()
+                            .all(|child| !current.present(child.id)) =>
+                {
+                    match run_native(tree.id, &native, &observe, &mut outcome, &mut archive) {
+                        Ok(message) => {
+                            messages.insert(tree.id, message);
+                        }
+                        Err(error) => outcome.errors.push(format!("{}: {error}", tree.id)),
                     }
                 }
+                _ => outcome.errors.push(format!("{}: {error}", tree.id)),
             }
-        }
-        if residuals_attempted {
-            archive = verify(&mut outcome.errors);
-        }
-    }
-
-    if let Some(observed) = &archive {
-        let mut retried = false;
-        for (tree, refusal) in &attempted {
-            let Some(error) = refusal else { continue };
-            let blocked = observed.blocked_writes(tree, &mut changes);
-            if blocked.contains(&tree.id)
-                || tree
-                    .descendants
-                    .iter()
-                    .any(|child| observed.present(child.id))
-            {
-                outcome.errors.push(format!("{}: {error}", tree.id));
-            } else if observed.present(tree.id) {
-                retried = true;
-                if let Err(error) = run_native(tree.id) {
-                    outcome.errors.push(format!("{}: {error}", tree.id));
-                }
-            }
-        }
-        if retried {
-            archive = verify(&mut outcome.errors);
-        }
-    } else {
-        for (tree, refusal) in &attempted {
-            if let Some(error) = refusal {
-                outcome.errors.push(format!("{}: {error}", tree.id));
-            }
-        }
-    }
-
-    if let Some(observed) = &archive {
-        for (tree, _) in &attempted {
-            observed.blocked_writes(tree, &mut changes);
-        }
-        for id in targets.difference(&verified_absent) {
-            let reason = if observed.nodes.get(id).is_some_and(|node| node.uncertain) {
-                "presenza della sessione non verificabile"
-            } else {
-                "sessione ancora presente nell’archivio Codex"
-            };
-            outcome.errors.push(format!("{id}: {reason}."));
         }
     }
     outcome.errors.extend(changes);
-    outcome.native_succeeded = native_successes.len();
-    outcome.verified_absent = verified_absent.len();
-    outcome.messages = attempted
-        .iter()
-        .filter(|(tree, _)| verified_absent.contains(&tree.id))
-        .filter_map(|(tree, _)| native_successes.get(&tree.id).cloned())
-        .collect();
-
-    // Native success and verified cascades can name the same UUID. Clean the
-    // union once, even when an observation needed for residuals failed.
-    verified_absent.extend(native_successes.into_keys());
-    for id in verified_absent {
-        cleanup(&plan.root, id, &mut outcome);
+    if let Some(current) = archive {
+        outcome.requested_absent = plan.trees.iter().all(|tree| !current.present(tree.id));
+        for id in targets {
+            if current.present(id) {
+                let reason = if current.nodes.get(&id).is_some_and(|node| node.uncertain) {
+                    "presenza della sessione non verificabile"
+                } else {
+                    "sessione ancora presente nell’archivio Codex"
+                };
+                outcome.errors.push(format!("{id}: {reason}."));
+                continue;
+            }
+            outcome.verified_absent += 1;
+            if let Some(message) = messages.remove(&id) {
+                outcome.messages.push(message);
+            }
+            cleanup(&plan.root, id, &mut outcome);
+        }
     }
     outcome
 }
 
+fn run_native(
+    id: Uuid,
+    native: &impl Fn(Uuid) -> Result<String, String>,
+    observe: &impl Fn() -> Result<Archive, String>,
+    outcome: &mut Deletion,
+    archive: &mut Option<Archive>,
+) -> Result<String, String> {
+    let result = native(id);
+    outcome.native_succeeded += usize::from(result.is_ok());
+    *archive = observe().map_err(|error| outcome.errors.push(error)).ok();
+    result
+}
+
 fn cleanup(root: &Path, id: Uuid, outcome: &mut Deletion) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     outcome.errors.extend(
         crate::cleanup::after_native_delete(root, id)
             .into_iter()
             .map(|error| format!("{id}: pulizia aggiuntiva incompleta. {error}")),
     );
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = (root, id, outcome);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protection_covers_archived_descendants_and_rejects_ambiguous_parents() {
+        let root = Uuid::from_u128(1);
+        let child = Uuid::from_u128(2);
+        let parent = Uuid::from_u128(3);
+        let facts = vec![
+            LineageFact::Present {
+                id: root,
+                archived: false,
+            },
+            LineageFact::Present {
+                id: child,
+                archived: true,
+            },
+            LineageFact::Edge {
+                parent: root,
+                child,
+            },
+        ];
+        let archive = Archive::from_facts(facts.clone());
+        let tree = archive
+            .tree(root, &BTreeSet::new())
+            .expect("verified descendant");
+        assert_eq!(tree.descendants[0].id, child);
+        assert!(tree.descendants[0].archived);
+        assert!(archive.tree(root, &BTreeSet::from([child])).is_err());
+        let ambiguous = Archive::from_facts(
+            facts
+                .into_iter()
+                .chain([LineageFact::Edge { parent, child }])
+                .collect(),
+        );
+        assert!(ambiguous.tree(root, &BTreeSet::new()).is_err());
+    }
 }

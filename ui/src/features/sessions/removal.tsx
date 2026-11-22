@@ -102,16 +102,25 @@ export function RemovalDialog({ path, title, project = false, onClose, onChange 
   </ConfirmationDialog>
 }
 
-export function SessionRemoval({ path, detail, onChange }: { path: string; detail: Detail; onChange: () => void }) {
+export function SessionRemoval({ path, detail, onChange, onRemoved }: {
+  path: string; detail: Detail; onChange: () => void; onRemoved: () => void
+}) {
   const [reviewing, setReviewing] = useState(false)
   const [outcome, setOutcome] = useState<DeletionResult>()
   const unavailable = detail.claude_cleanup_supported ? null : detail.session.removal_reason
+  const removed = outcome?.requested_absent ?? (outcome?.status === 'deleted')
+
+  function closeReview() {
+    setReviewing(false)
+    if (removed) onRemoved()
+  }
+
   return <footer className="preview-footer">
     {unavailable && <p className="removal-reason">{unavailable}</p>}
     {outcome && <p role="status" className="removal-reason">{outcome.message}</p>}
-    <GlassButton tone="danger" disabled={!!unavailable || outcome?.status === 'deleted'}
+    <GlassButton tone="danger" disabled={!!unavailable || removed}
       onClick={() => setReviewing(true)}>Remove session</GlassButton>
     {reviewing && <RemovalDialog path={path} title={detail.session.title || detail.session.native_id}
-      onChange={result => { setOutcome(result); onChange() }} onClose={() => setReviewing(false)} />}
+      onChange={result => { setOutcome(result); onChange() }} onClose={closeReview} />}
   </footer>
 }

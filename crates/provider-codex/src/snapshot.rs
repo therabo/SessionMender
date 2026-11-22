@@ -1,4 +1,4 @@
-//! Read-only bounded SQLite snapshots in the kernel-attested worker.
+//! Read-only bounded SQLite snapshots. Windows opens only a verified private copy.
 use agentmender_provider_api::{ProviderError, filesystem};
 use rusqlite::{
     Connection, OpenFlags,
@@ -17,6 +17,7 @@ const DB_NAME: &str = "state_5.sqlite";
 const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DATABASE_BYTES: u64 = 32 * 1024 * 1024;
 const CAPTURE_TIME: Duration = Duration::from_secs(3);
+#[cfg(target_os = "macos")]
 const SOURCE_NAMES: [&str; 3] = [DB_NAME, "state_5.sqlite-wal", "state_5.sqlite-shm"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,7 +28,6 @@ pub(super) struct FileFingerprint {
     stable_read: bool,
 }
 
-#[cfg(target_os = "macos")]
 pub(super) fn same_primary_identity(before: &[FileFingerprint], after: &[FileFingerprint]) -> bool {
     match (before.first(), after.first()) {
         (Some(a), Some(b))
@@ -46,7 +46,7 @@ pub(super) fn same_primary_identity(before: &[FileFingerprint], after: &[FileFin
 struct FileRecord {
     bytes: u64,
     hash: String,
-    inode: u64,
+    inode: u128,
     device: u64,
     mode: u32,
     modified: (i64, i64),
@@ -76,32 +76,33 @@ fn sha256(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn metadata_record(meta: &fs::Metadata, hash: String) -> FileRecord {
     use std::os::unix::fs::MetadataExt;
     FileRecord {
         bytes: meta.len(),
         hash,
-        inode: meta.ino(),
+        inode: u128::from(meta.ino()),
         device: meta.dev(),
         mode: meta.mode(),
         modified: (meta.mtime(), meta.mtime_nsec()),
         changed: (meta.ctime(), meta.ctime_nsec()),
     }
 }
-#[cfg(not(unix))]
-fn metadata_record(meta: &fs::Metadata, hash: String) -> FileRecord {
+#[cfg(windows)]
+fn metadata_record(item: filesystem::Item, hash: String) -> FileRecord {
     FileRecord {
-        bytes: meta.len(),
+        bytes: item.bytes,
         hash,
-        inode: 0,
-        device: 0,
-        mode: 0,
-        modified: (0, 0),
-        changed: (0, 0),
+        inode: u128::from_le_bytes(item.identity.id),
+        device: item.identity.volume,
+        mode: item.attributes,
+        modified: (item.modified, 0),
+        changed: (item.changed, 0),
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(super) fn fingerprints(root: &Path) -> Result<Vec<FileFingerprint>, ProviderError> {
     let deadline = Instant::now() + CAPTURE_TIME;
     let mut result = Vec::new();
@@ -145,6 +146,11 @@ pub(super) fn fingerprints(root: &Path) -> Result<Vec<FileFingerprint>, Provider
         check_deadline(deadline)?;
     }
     Ok(result)
+}
+
+#[cfg(windows)]
+pub(super) fn fingerprints(root: &Path) -> Result<Vec<FileFingerprint>, ProviderError> {
+    capture_files(root, None, Instant::now() + CAPTURE_TIME)
 }
 
 pub(super) fn fingerprints_changed(before: &[FileFingerprint], after: &[FileFingerprint]) -> bool {
@@ -208,6 +214,7 @@ pub(super) fn bounded_backup(
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(super) fn validate_worker_paths(
     source_root: &Path,
     private_root: &Path,
@@ -274,7 +281,7 @@ pub(super) fn validate_worker_paths(
 
 fn open_provider_db(root: &Path) -> Result<Connection, ProviderError> {
     let source = Connection::open_with_flags(
-        root.join("state_5.sqlite"),
+        root.join(DB_NAME),
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
@@ -287,16 +294,89 @@ fn open_provider_db(root: &Path) -> Result<Connection, ProviderError> {
     Ok(source)
 }
 
-#[cfg(target_os = "macos")]
 pub(super) fn read_snapshot(
     root: &Path,
     end: Instant,
     backup_timeout: Option<Duration>,
 ) -> Result<Connection, ProviderError> {
+    let deadline = backup_timeout.map_or(end, |timeout| end.min(Instant::now() + timeout));
+    #[cfg(windows)]
+    let private = {
+        let directory = filesystem::Directory::open(root)
+            .map_err(|_| unavailable("local Codex database root unavailable"))?;
+        let private = directory
+            .tempdir_outside("agentmender-codex-")
+            .map_err(|_| unavailable("private SQLite capture directory unavailable"))?;
+        let before = capture_files(root, Some(private.path()), deadline)?;
+        let after = capture_files(root, None, deadline)?;
+        if fingerprints_changed(&before, &after) {
+            return Err(crate::worker::stale());
+        }
+        private
+    };
+    #[cfg(windows)]
+    let root = private.path();
     let source = open_provider_db(root)?;
     let mut memory = Connection::open_in_memory().map_err(sqlite_error)?;
     configure(&memory)?;
-    let deadline = backup_timeout.map_or(end, |timeout| end.min(Instant::now() + timeout));
     bounded_backup(&source, &mut memory, deadline)?;
     Ok(memory)
+}
+
+#[cfg(windows)]
+fn capture_files(
+    root: &Path,
+    copy_to: Option<&Path>,
+    deadline: Instant,
+) -> Result<Vec<FileFingerprint>, ProviderError> {
+    use std::io::{ErrorKind, Read, Write};
+    let directory = filesystem::Directory::open(root)
+        .map_err(|_| unavailable("local Codex database root unavailable"))?;
+    let mut records = Vec::new();
+    // SQLite rebuilds the WAL index in the private directory from the WAL.
+    for name in [DB_NAME, "state_5.sqlite-wal"] {
+        check_deadline(deadline)?;
+        let path = directory.path().join(name);
+        let mut file = match directory.open_read(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound && name != DB_NAME => {
+                records.push(FileFingerprint {
+                    name: name.into(),
+                    record: None,
+                    stable_read: true,
+                });
+                continue;
+            }
+            Err(_) => {
+                return Err(unavailable(
+                    "Codex SQLite file missing, linked, or unreadable",
+                ));
+            }
+        };
+        let before = filesystem::Item::from_file(&file).map_err(|_| crate::worker::stale())?;
+        if before.bytes > MAX_FILE_BYTES as u64 {
+            return Err(unavailable("source fingerprint byte budget exceeded"));
+        }
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(MAX_FILE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| crate::worker::stale())?;
+        check_deadline(deadline)?;
+        let after = filesystem::Item::from_file(&file).map_err(|_| crate::worker::stale())?;
+        if bytes.len() as u64 != before.bytes || before != after {
+            return Err(crate::worker::stale());
+        }
+        if let Some(destination) = copy_to {
+            fs::File::create_new(destination.join(name))
+                .and_then(|mut file| file.write_all(&bytes))
+                .map_err(|_| unavailable("private SQLite capture write failed"))?;
+        }
+        records.push(FileFingerprint {
+            name: name.into(),
+            record: Some(metadata_record(after, sha256(&bytes))),
+            stable_read: true,
+        });
+    }
+    Ok(records)
 }

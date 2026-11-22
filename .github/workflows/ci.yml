@@ -24,3 +24,17 @@ jobs:
       - run: cargo +stable fmt --all -- --check
       - run: cargo +stable clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo +stable build --locked --workspace
+      - run: cargo +stable test --locked --workspace
+      - name: Exercise the Windows backend and browser with isolated archives
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $native = Join-Path $env:RUNNER_TEMP sessionmender-codex
+          npm install --prefix $native --no-audit --no-fund '@openai/codex@0.171.0-alpha.13'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:SESSIONMENDER_TEST_CODEX = (Get-ChildItem $native -Recurse -Filter codex.exe |
+            Select-Object -First 1).FullName
+          $env:SESSIONMENDER_TEST_CHROMIUM = @(${env:ProgramFiles(x86)}, $env:ProgramFiles) |
+            ForEach-Object { Join-Path $_ 'Microsoft/Edge/Application/msedge.exe' } |
+            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          npm run test:windows --prefix ui

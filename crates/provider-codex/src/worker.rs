@@ -1,30 +1,37 @@
 //! Fixed operations in the confined Codex reader process.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod inventory;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod lineage;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod projects;
 
-use crate::{CodexAdapter, Guard};
+use crate::CodexAdapter;
+#[cfg(not(windows))]
+use crate::Guard;
 use agentmender_domain::{
     CodexMembership, InventoryObservation, ProjectLocator, ProviderKind, RegisteredProject,
     Session, SessionIdentity, TranscriptMessage,
 };
-use agentmender_provider_api::{
-    ProviderError, evidence::EvidenceSandbox, process, validate_location,
-};
+use agentmender_provider_api::{ProviderError, validate_location};
+#[cfg(not(windows))]
+use agentmender_provider_api::{evidence::EvidenceSandbox, process};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
-    sync::mpsc,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
 
+#[cfg(not(windows))]
+use std::{
+    io::{BufRead, BufReader, Read, Write},
+    sync::mpsc,
+};
+#[cfg(not(windows))]
 const MAX_REQUEST: usize = 64 * 1024;
+#[cfg(not(windows))]
 const MAX_OUTPUT: usize = 128 * 1024;
 const PAGE_ROWS: usize = 128;
 const LINEAGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -92,9 +99,21 @@ struct InventoryPage {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) enum LineageFact {
-    Present { id: Uuid, archived: bool },
-    Edge { parent: Uuid, child: Uuid },
+    Present {
+        id: Uuid,
+        archived: bool,
+    },
+    Edge {
+        parent: Uuid,
+        child: Uuid,
+    },
     Uncertain(Uuid),
+    #[cfg(windows)]
+    Rollout {
+        id: Uuid,
+        path: PathBuf,
+        revision: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -103,7 +122,7 @@ struct LineagePage {
     next: Option<usize>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn lineage_page(facts: &[LineageFact], offset: usize) -> Result<Response, ProviderError> {
     let end = offset.saturating_add(PAGE_ROWS).min(facts.len());
     let page = facts.get(offset..end).ok_or_else(stale)?.to_vec();
@@ -113,6 +132,7 @@ fn lineage_page(facts: &[LineageFact], offset: usize) -> Result<Response, Provid
     }))
 }
 
+#[cfg(not(windows))]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -141,7 +161,9 @@ enum Operation {
 
 #[derive(Serialize, Deserialize)]
 enum Response {
+    #[cfg(not(windows))]
     Unavailable,
+    #[cfg(not(windows))]
     Stale,
     Inventory(InventoryPage),
     Transcript(TranscriptPage),
@@ -157,43 +179,46 @@ pub(super) fn stale() -> ProviderError {
     ProviderError::InvalidScope("stale_codex_source".into())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 struct Snapshot {
     files: Vec<crate::snapshot::FileFingerprint>,
     db: rusqlite::Connection,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn observe(
-    request: &Request,
+    root: &std::path::Path,
+    operation: Operation,
     resident: &mut Option<Snapshot>,
     lineage: &mut Vec<LineageFact>,
 ) -> Result<Response, ProviderError> {
     use crate::{reader, snapshot};
 
-    if let Operation::Lineage { offset } = request.operation
+    if let Operation::Lineage { offset } = operation
         && offset != 0
     {
         return lineage_page(lineage, offset);
     }
 
-    let lineage_operation = matches!(request.operation, Operation::Lineage { .. });
+    let lineage_operation = matches!(operation, Operation::Lineage { .. });
     let end = Instant::now()
         + if lineage_operation {
             LINEAGE_TIMEOUT
         } else {
             Duration::from_secs(8)
         };
-    let root = &request.source_root;
     let backup_timeout = (!lineage_operation).then_some(Duration::from_secs(3));
     let load_snapshot = || snapshot::read_snapshot(root, end, backup_timeout);
     let before = snapshot::fingerprints(root)?;
+    if snapshot::fingerprints_changed(&before, &before) {
+        return Err(stale());
+    }
     let db = match resident.take() {
         Some(snapshot) if !snapshot::fingerprints_changed(&snapshot.files, &before) => snapshot.db,
         _ => load_snapshot()?,
     };
     let mut transcript = None;
-    let response = match &request.operation {
+    let response = match &operation {
         Operation::Inventory { after, limit } => {
             let revision = reader::hash(&serde_json::to_vec(&before).map_err(|_| unavailable())?);
             Response::Inventory(inventory::page(&db, root, after, *limit, revision, end)?)
@@ -296,7 +321,12 @@ pub fn run_worker() -> Result<(), ProviderError> {
                 return Err(unavailable());
             }
             paths.get_or_insert_with(|| (current.0.clone(), current.1.clone(), current.2.clone()));
-            let response = match observe(&request, &mut resident, &mut lineage) {
+            let response = match observe(
+                &request.source_root,
+                request.operation,
+                &mut resident,
+                &mut lineage,
+            ) {
                 Ok(response) => response,
                 Err(ProviderError::InvalidScope(reason)) if reason == "stale_codex_source" => {
                     Response::Stale
@@ -316,6 +346,7 @@ pub fn run_worker() -> Result<(), ProviderError> {
     }
 }
 
+#[cfg(not(windows))]
 pub(super) struct Connection {
     child: Guard,
     sandbox: EvidenceSandbox,
@@ -323,6 +354,7 @@ pub(super) struct Connection {
     output: mpsc::Receiver<std::io::Result<Vec<u8>>>,
 }
 
+#[cfg(not(windows))]
 impl Connection {
     fn start(adapter: &CodexAdapter) -> Result<Self, ProviderError> {
         let sandbox = EvidenceSandbox::new(&adapter.location.state_root, &adapter.home)?;
@@ -409,7 +441,49 @@ impl Connection {
     }
 }
 
+#[cfg(windows)]
+pub(super) struct Connection {
+    root: PathBuf,
+    resident: Option<Snapshot>,
+    lineage: Vec<LineageFact>,
+}
+
+#[cfg(windows)]
+impl Connection {
+    fn start(adapter: &CodexAdapter) -> Result<Self, ProviderError> {
+        Ok(Self {
+            root: adapter.observation_root()?,
+            resident: None,
+            lineage: Vec::new(),
+        })
+    }
+
+    fn call(
+        &mut self,
+        operation: Operation,
+        deadline: Option<Instant>,
+    ) -> Result<Response, ProviderError> {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(stale());
+        }
+        let root = crate::discovery::verified_read_root(&self.root)?;
+        let _directory =
+            agentmender_provider_api::filesystem::Directory::open(&root).map_err(|_| stale())?;
+        observe(&root, operation, &mut self.resident, &mut self.lineage)
+    }
+}
+
 impl CodexAdapter {
+    fn observation_root(&self) -> Result<PathBuf, ProviderError> {
+        #[cfg(windows)]
+        return crate::discovery::verified_read_root(&self.location.state_root);
+        #[cfg(not(windows))]
+        self.location
+            .state_root
+            .canonicalize()
+            .map_err(|_| unavailable())
+    }
+
     fn observe(&self, operation: Operation) -> Result<Response, ProviderError> {
         validate_location(&self.location)?;
         let mut slot = self.connection.lock().map_err(|_| unavailable())?;
@@ -432,6 +506,9 @@ impl CodexAdapter {
         if result.is_err() {
             *slot = None;
         }
+        #[cfg(windows)]
+        return result;
+        #[cfg(not(windows))]
         match result? {
             Response::Unavailable => Err(unavailable()),
             Response::Stale => Err(stale()),
@@ -468,11 +545,7 @@ impl CodexAdapter {
         let mut sessions = Vec::new();
         let mut after = String::new();
         let mut revision = None;
-        let root = self
-            .location
-            .state_root
-            .canonicalize()
-            .map_err(|_| unavailable())?;
+        let root = self.observation_root()?;
         let mut remaining = limit;
         let mut incomplete = false;
         while remaining > 0 {

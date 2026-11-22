@@ -57,7 +57,10 @@ export function ExportRemoval({ keys, onClose, onSettled }: {
     const protectedExports = outcome.not_deleted.filter(item => !item.error)
     const deletionError = outcome.not_deleted.find(item => item.error)
     const preservedMessage = 'Protected exports were preserved.'
-    if (!outcome.deleted.length) {
+    const partialGroup = outcome.not_deleted.find(item => item.removed_entries > 0)
+    if (partialGroup) {
+      setState({ status: 'partial', message: `${numberLabel(partialGroup.removed_entries)} items were removed from an export group. ${partialGroup.reason}` })
+    } else if (!outcome.deleted.length) {
       setState({ status: 'error', message: deletionError?.reason ?? (protectedExports.length ? preservedMessage : 'No exports were removed.') })
     } else if (outcome.not_deleted.length) {
       const message = deletionError

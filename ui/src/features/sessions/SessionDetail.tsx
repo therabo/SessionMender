@@ -43,7 +43,7 @@ export function SessionDetail({ provider, rowKey, onClose, onChange }: {
       <div className="preview-body session-preview-body">
         {detail.conversation_preview ? <Conversation path={path} /> : <EmptyState title="Conversation preview unavailable" />}
       </div>
-      <SessionRemoval path={path} detail={detail} onChange={onChange} />
+      <SessionRemoval path={path} detail={detail} onChange={onChange} onRemoved={onClose} />
     </> : error ? <Notice tone="error">{error}</Notice> : <LoadingState title="Loading session details" />}
   </>
 }

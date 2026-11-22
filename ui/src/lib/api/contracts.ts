@@ -54,6 +54,7 @@ export type DeletionResult = {
   status: 'deleted' | 'partial' | 'failed'
   message: string
   errors: string[]
+  requested_absent?: boolean
 }
 export type Transcript = {
   messages: { role: 'user' | 'assistant'; text: string }[]

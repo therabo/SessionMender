@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "test:background": "node --test tests/ambient-background.test.mjs",
-    "test:background:browser": "node --test tests/ambient-background.browser.mjs"
+    "test:background:browser": "node --test tests/ambient-background.browser.mjs",
+    "test:windows": "node --test tests/windows-flows.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.73.0",

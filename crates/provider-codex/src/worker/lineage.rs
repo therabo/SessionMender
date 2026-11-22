@@ -2,14 +2,18 @@
 use super::{LineageFact, unavailable};
 use crate::reader::{self, ObservedSource};
 use agentmender_domain::canonical_uuid;
-use agentmender_provider_api::{ProviderError, filesystem, rewrite::directory};
+#[cfg(unix)]
+use agentmender_provider_api::rewrite::directory;
+use agentmender_provider_api::{ProviderError, filesystem};
 use rusqlite::Connection;
+#[cfg(unix)]
 use rustix::fs::{self, AtFlags, Dir, FileType};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::{
     collections::BTreeSet,
     ffi::OsStr,
     io,
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -51,6 +55,12 @@ pub(super) fn read(
             Ok(Some(locator)) => match reader::open_transcript(root, Some(Path::new(&locator))) {
                 Ok((file, path)) => {
                     visited.insert(path.clone());
+                    #[cfg(windows)]
+                    facts.push(LineageFact::Rollout {
+                        id,
+                        path: path.clone(),
+                        revision: reader::stamp(&file)?,
+                    });
                     record_header(
                         &mut facts,
                         Some(id),
@@ -158,6 +168,7 @@ fn rollout_id(name: &OsStr) -> Option<Uuid> {
     }
 }
 
+#[cfg(unix)]
 fn scan_rollouts(
     root: &Path,
     folder: PathBuf,
@@ -210,6 +221,56 @@ fn scan_rollouts(
                         }
                     }
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn scan_rollouts(
+    root: &Path,
+    folder: PathBuf,
+    archived: bool,
+    visited: &BTreeSet<PathBuf>,
+    facts: &mut Vec<LineageFact>,
+    end: Instant,
+) -> io::Result<()> {
+    let root = filesystem::Directory::open(root)?;
+    let mut pending = vec![folder];
+    while let Some(path) = pending.pop() {
+        check_deadline(end)?;
+        let directory = match root.child(&path) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for name in directory.entries()? {
+            check_deadline(end)?;
+            let name = name?;
+            let child = directory.path().join(&name);
+            let item = directory.inspect(&child)?;
+            if item.directory {
+                pending.push(child);
+            } else if !visited.contains(&child)
+                && (child
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
+                    || reader::compressed_path(&child))
+            {
+                let expected = rollout_id(&name);
+                let file = directory.open_read(&child)?;
+                if let Some(id) = expected {
+                    let revision = reader::stamp(&file).map_err(io::Error::other)?;
+                    facts.push(LineageFact::Rollout {
+                        id,
+                        path: child.clone(),
+                        revision,
+                    });
+                }
+                record_header(facts, expected, archived, end, |id, end| {
+                    reader::relationship_header(&file, &child, id, end)
+                })?;
             }
         }
     }

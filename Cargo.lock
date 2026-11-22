@@ -44,10 +44,12 @@ dependencies = [
  "agentmender-domain",
  "libc",
  "rustix",
+ "serde_json",
  "tempfile",
  "thiserror",
  "uuid",
  "winapi-util",
+ "windows-sys",
 ]
 
 [[package]]
@@ -75,6 +77,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "toml",
  "uuid",
  "zstd",

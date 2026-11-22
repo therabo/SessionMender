@@ -7,6 +7,7 @@ mod storage;
 mod transcript;
 
 use std::{
+    borrow::Cow,
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -46,6 +47,8 @@ struct App {
     authorization: String,
     clawd_model: Option<Bytes>,
     codex: CodexAdapter,
+    codex_native_reason: Option<&'static str>,
+    mutations: Mutex<()>,
     claude: ClaudeAdapter,
     limit: usize,
     protected: Vec<String>,
@@ -54,29 +57,29 @@ struct App {
     discovery: Discovery,
     exports: Mutex<storage::ExportState>,
     home: PathBuf,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     claude_review: Mutex<Option<removal::ClaudeReview>>,
     cursors: Mutex<TranscriptCursors>,
     reads: Arc<Semaphore>,
 }
 
 #[derive(Debug)]
-struct ApiError(StatusCode, &'static str);
+struct ApiError(StatusCode, Cow<'static, str>);
 
 impl ApiError {
     fn bad(message: &'static str) -> Self {
-        Self(StatusCode::BAD_REQUEST, message)
+        Self(StatusCode::BAD_REQUEST, message.into())
     }
-    fn conflict(message: &'static str) -> Self {
-        Self(StatusCode::CONFLICT, message)
+    fn conflict(message: impl Into<Cow<'static, str>>) -> Self {
+        Self(StatusCode::CONFLICT, message.into())
     }
     fn missing(message: &'static str) -> Self {
-        Self(StatusCode::NOT_FOUND, message)
+        Self(StatusCode::NOT_FOUND, message.into())
     }
     fn internal() -> Self {
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "Operazione locale non disponibile.",
+            "Operazione locale non disponibile.".into(),
         )
     }
 }
@@ -107,11 +110,11 @@ async fn boundary(State(app): State<Arc<App>>, request: Request, next: Next) -> 
         || (!matches!(*request.method(), Method::GET | Method::HEAD) && !origin())
         || (headers.contains_key(header::ORIGIN) && !origin())
     {
-        ApiError(StatusCode::FORBIDDEN, "Origine locale non valida.").into_response()
+        ApiError(StatusCode::FORBIDDEN, "Origine locale non valida.".into()).into_response()
     } else if path.starts_with("/api/") && path != "/api/authorize" && !authorized() {
         ApiError(
             StatusCode::UNAUTHORIZED,
-            "Apri il link di avvio di AgentMender.",
+            "Apri il link di avvio di AgentMender.".into(),
         )
         .into_response()
     } else {
@@ -156,7 +159,7 @@ async fn authorize(
     if ticket.as_ref() != Some(&request.ticket) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Link di avvio non valido o già utilizzato.",
+            "Link di avvio non valido o già utilizzato.".into(),
         ));
     }
     *ticket = None;
@@ -172,7 +175,7 @@ async fn read<T: Send + 'static>(
     let slot = app.reads.clone().try_acquire_owned().map_err(|_| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
-            "AgentMender è occupato. Riprova tra poco.",
+            "AgentMender è occupato. Riprova tra poco.".into(),
         )
     })?;
     tokio::task::spawn_blocking(move || {
@@ -320,7 +323,7 @@ async fn design_asset(State(app): State<Arc<App>>, Path(name): Path<String>) -> 
 
 fn router(app: Arc<App>) -> Router {
     let routes = Router::new();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     let routes = routes.route(
         "/api/claude/sessions/{key}/removal-preview",
         post(removal::claude_preview),
@@ -389,6 +392,7 @@ pub(super) struct Configuration {
     pub limit: usize,
     pub protected: Vec<String>,
     pub no_open: bool,
+    pub browser_executable: Option<PathBuf>,
 }
 
 pub(super) fn run(config: Configuration) -> Result<(), String> {
@@ -401,6 +405,7 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
     let launch = token().map_err(|_| error("Unable to create a local authorization ticket."))?;
     let bearer = token().map_err(|_| error("Unable to create a local browser session."))?;
     let clawd_model = model_asset::load_clawd();
+    let codex_native_reason = config.codex.native_removal_reason();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -421,10 +426,12 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
             authorization: format!("Bearer {bearer}"),
             clawd_model,
             codex: config.codex,
+            codex_native_reason,
+            mutations: Mutex::default(),
             discovery: config.discovery,
             exports: Mutex::default(),
             home: config.home,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             claude_review: Mutex::default(),
             claude: config.claude,
             limit: config.limit,
@@ -435,7 +442,9 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
             reads: Arc::new(Semaphore::new(8)),
         });
         println!("{url}");
-        if !config.no_open && browser::open(addr, &launch).is_err() {
+        if !config.no_open
+            && browser::open(addr, &launch, config.browser_executable.as_deref()).is_err()
+        {
             eprintln!("Open the local URL printed above in your browser.");
         }
         axum::serve(listener, router(app))

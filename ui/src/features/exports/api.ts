@@ -12,7 +12,7 @@ export type Group = {
 }
 export type Page = { rows: Group[]; total: number; complete: boolean }
 export type Preview = { groups: Group[]; size: Size; protected: number; removable: number; complete: boolean; receipt: string | null }
-export type Outcome = { deleted: { key: string }[]; not_deleted: { key: string; reason: string; error: boolean }[] }
+export type Outcome = { deleted: { key: string }[]; not_deleted: { key: string; reason: string; error: boolean; removed_entries: number }[] }
 export const exportSelectionLimit = 32
 export const exportsPath = '/api/storage/exports'
 

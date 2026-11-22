@@ -30,8 +30,6 @@ pub(super) fn after_native_delete(root: &Path, id: Uuid) -> Vec<String> {
                 }
             }
 
-            let catalogs = desktop_reconciliation::remove_local_thread(root, &id, &mut errors);
-
             for name in [".codex-global-state.json", ".codex-global-state.json.bak"] {
                 if let Err(error) = rewrite::replace(
                     &archive,
@@ -51,11 +49,7 @@ pub(super) fn after_native_delete(root: &Path, id: Uuid) -> Vec<String> {
                 }
             }
 
-            desktop_reconciliation::schedule_desktop_catalog_reconciliation(
-                root,
-                catalogs,
-                &mut errors,
-            );
+            desktop_reconciliation::remove_local_thread(root, &id, &mut errors);
         }
         Err(error) => errors.push(format!("Archivio Codex: {error}")),
     }

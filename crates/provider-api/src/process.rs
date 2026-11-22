@@ -44,16 +44,24 @@ pub fn codex_delete(
     sqlite_override: &str,
     id: uuid::Uuid,
 ) -> Result<String, String> {
-    let output = Command::new(executable)
+    #[cfg(windows)]
+    let verified =
+        windows_executable(ProviderKind::Codex, executable).map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    let executable = &verified.path;
+    let mut command = Command::new(executable);
+    command
         .args(["-c", sqlite_override, "delete"])
         .arg(id.to_string())
         .arg("--force")
         .env("CODEX_HOME", root)
         .env("CODEX_SQLITE_HOME", root)
         .current_dir(root)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("Avvio del comando Codex: {error}"))?;
+        .stdin(Stdio::null());
+    #[cfg(windows)]
+    windows_environment(&mut command, root);
+    let output =
+        native_output(command).map_err(|error| format!("Avvio del comando Codex: {error}"))?;
     let message = |bytes: &[u8]| {
         String::from_utf8_lossy(bytes)
             .lines()
@@ -88,6 +96,230 @@ pub fn codex_delete(
     })
 }
 
+fn native_output(mut command: Command) -> std::io::Result<std::process::Output> {
+    use std::{io::Read, sync::mpsc, thread, time::Instant};
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    fn capture(stream: impl Read + Send + 'static) -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            const LIMIT: u64 = 32 * 1024;
+            let mut bytes = Vec::new();
+            let result = stream
+                .take(LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .and_then(|_| {
+                    if bytes.len() as u64 > LIMIT {
+                        return Err(std::io::Error::other("output Codex oltre il limite"));
+                    }
+                    Ok(bytes)
+                });
+            let _ = sender.send(result);
+        });
+        receiver
+    }
+    let stdout = capture(child.stdout.take().expect("piped stdout"));
+    let stderr = capture(child.stderr.take().expect("piped stderr"));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(result
+                    .err()
+                    .unwrap_or_else(|| std::io::ErrorKind::TimedOut.into()));
+            }
+        }
+    };
+    let receive = |reader: mpsc::Receiver<std::io::Result<Vec<u8>>>| {
+        reader
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut))?
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: receive(stdout)?,
+        stderr: receive(stderr)?,
+    })
+}
+
+#[cfg(windows)]
+struct VerifiedExecutable {
+    path: std::path::PathBuf,
+    _directory: Option<crate::filesystem::Directory>,
+    _file: std::fs::File,
+}
+
+#[cfg(windows)]
+fn windows_executable(
+    kind: ProviderKind,
+    executable: &Path,
+) -> Result<VerifiedExecutable, ProviderError> {
+    use crate::filesystem::Directory;
+    let name = match kind {
+        ProviderKind::Codex => "codex.exe",
+        ProviderKind::Claude => "claude.exe",
+    };
+    let unavailable =
+        || ProviderError::CapabilityUnavailable("unverified native provider executable".into());
+    if !executable.is_absolute()
+        || !executable
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+    {
+        return Err(unavailable());
+    }
+    let executable =
+        crate::filesystem::canonical_local_path(executable).map_err(|_| unavailable())?;
+    let parent = executable.parent().ok_or_else(unavailable)?;
+    match Directory::open(parent) {
+        Ok(directory) => {
+            let file = directory
+                .pin_executable(&executable)
+                .map_err(|error| crate::io_error(&executable, error))?;
+            Ok(VerifiedExecutable {
+                path: executable,
+                _directory: Some(directory),
+                _file: file,
+            })
+        }
+        // WindowsApps can deny opening an ancestor by handle while allowing
+        // traversal to a package file. Only Store registration authorizes
+        // this path, and the opened file must resolve to that exact path.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                && kind == ProviderKind::Codex
+                && registered_codex_executable(&executable)? =>
+        {
+            let file = crate::filesystem::open_registered_executable(&executable)
+                .map_err(|error| crate::io_error(&executable, error))?;
+            Ok(VerifiedExecutable {
+                path: executable,
+                _directory: None,
+                _file: file,
+            })
+        }
+        Err(error) => Err(crate::io_error(parent, error)),
+    }
+}
+
+#[cfg(windows)]
+fn registered_codex_executable(executable: &Path) -> Result<bool, ProviderError> {
+    use serde_json::Value;
+    let bytes = codex_windows_packages()?;
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+    let registered = serde_json::from_slice::<Value>(bytes).map_err(|_| {
+        ProviderError::CapabilityUnavailable("Windows package registration unavailable".into())
+    })?;
+    let packages = registered
+        .as_array()
+        .map_or(std::slice::from_ref(&registered), Vec::as_slice);
+    Ok(packages.iter().take(8).any(|package| {
+        let field = |name| package.get(name).and_then(Value::as_str);
+        let Some(name @ ("OpenAI.Codex" | "OpenAI.CodexBeta")) = field("Name") else {
+            return false;
+        };
+        if field("PublisherId") != Some("2p2nqsd0c76g0")
+            || field("SignatureKind") != Some("Store")
+            || field("PackageFamilyName") != Some(format!("{name}_2p2nqsd0c76g0").as_str())
+        {
+            return false;
+        }
+        let Some(root) = field("InstallLocation")
+            .and_then(|path| crate::filesystem::canonical_local_path(Path::new(path)).ok())
+        else {
+            return false;
+        };
+        [
+            "app/resources/codex.exe",
+            "resources/codex.exe",
+            "codex.exe",
+        ]
+        .iter()
+        .any(|suffix| root.join(suffix) == executable)
+    }))
+}
+
+#[cfg(windows)]
+fn windows_environment(command: &mut Command, root: &Path) {
+    command.env_clear();
+    for name in [
+        "SystemRoot",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+        .env("CODEX_HOME", root)
+        .env("CODEX_SQLITE_HOME", root);
+}
+
+#[cfg(windows)]
+fn windows_probe(executable: &VerifiedExecutable, args: &[&str]) -> Result<Vec<u8>, ProviderError> {
+    let private = tempfile::tempdir().map_err(|_| {
+        ProviderError::CapabilityUnavailable("private probe directory unavailable".into())
+    })?;
+    let mut command = Command::new(&executable.path);
+    windows_environment(&mut command, private.path());
+    command
+        .current_dir(private.path())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    bounded_output(command, 16 * 1024)
+}
+
+#[cfg(windows)]
+fn windows_version(
+    kind: ProviderKind,
+    executable: &VerifiedExecutable,
+) -> Result<String, ProviderError> {
+    let bytes = windows_probe(executable, &["--version"])?;
+    std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|text| parse_version(kind, text))
+        .ok_or_else(|| {
+            ProviderError::CapabilityUnavailable("unrecognized provider version banner".into())
+        })
+}
+
+#[cfg(windows)]
+pub fn codex_delete_version(executable: &Path) -> Result<String, ProviderError> {
+    let executable = windows_executable(ProviderKind::Codex, executable)?;
+    let version = windows_version(ProviderKind::Codex, &executable)?;
+    if version != "0.171.0-alpha.13" {
+        return Err(ProviderError::CapabilityUnavailable(
+            "native Windows Codex delete version not validated".into(),
+        ));
+    }
+    let help = windows_probe(&executable, &["delete", "--help"])?;
+    let help = String::from_utf8_lossy(&help);
+    if !help
+        .lines()
+        .any(|line| line.starts_with("Usage: codex delete ") && line.contains("<SESSION>"))
+        || !help.lines().any(|line| line.trim() == "--force")
+    {
+        return Err(ProviderError::CapabilityUnavailable(
+            "native Codex delete --force unavailable".into(),
+        ));
+    }
+    Ok(version)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleMetadata {
     pub identifier: String,
@@ -102,8 +334,8 @@ fn small_output(command: Command) -> Result<Vec<u8>, ProviderError> {
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn bounded_output(mut command: Command, limit: u64) -> Result<Vec<u8>, ProviderError> {
-    let mut child = command.spawn().map_err(|_| {
-        ProviderError::CapabilityUnavailable("write-denied metadata process could not start".into())
+    let mut child = command.spawn().map_err(|error| {
+        ProviderError::CapabilityUnavailable(format!("metadata process could not start: {error}"))
     })?;
     let mut output = child.stdout.take().ok_or_else(|| {
         ProviderError::CapabilityUnavailable("metadata stdout unavailable".into())
@@ -196,7 +428,7 @@ fn linux_version_command(executable: &Path) -> Result<Command, ProviderError> {
     Ok(process)
 }
 
-/// Probe an executable version without a shell or unsandboxed retry.
+/// Probe a native executable version without invoking a shell.
 pub fn probe_version(kind: ProviderKind, executable: &Path) -> Result<String, ProviderError> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
@@ -213,7 +445,11 @@ pub fn probe_version(kind: ProviderKind, executable: &Path) -> Result<String, Pr
             "unrecognized provider version banner".into(),
         ))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    {
+        windows_version(kind, &windows_executable(kind, executable)?)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = (kind, executable);
         Err(ProviderError::CapabilityUnavailable(
@@ -276,7 +512,7 @@ pub fn read_bundle_metadata(bundle: &Path) -> Result<BundleMetadata, ProviderErr
 }
 
 /// Strictly recognize official version banners; proximity never proves compatibility.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 fn parse_version(kind: ProviderKind, banner: &str) -> Option<String> {
     let line = banner.trim();
     let value = match kind {
@@ -510,7 +746,7 @@ pub fn claude_writer_observation() -> ClaudeProcessObservation {
 #[cfg(windows)]
 pub fn codex_windows_packages() -> Result<Vec<u8>, ProviderError> {
     windows_packages(
-        "$env:PSModulePath=Join-Path $PSHOME Modules; [Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-AppxPackage -Name OpenAI.Codex* | Select-Object Name,PublisherId,InstallLocation,PackageFamilyName,@{n='Version';e={$_.Version.ToString()}} | ConvertTo-Json -Compress",
+        "$env:PSModulePath=Join-Path $PSHOME Modules; [Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-AppxPackage -Name OpenAI.Codex* | Select-Object Name,PublisherId,InstallLocation,PackageFamilyName,@{n='SignatureKind';e={$_.SignatureKind.ToString()}},@{n='Version';e={$_.Version.ToString()}} | ConvertTo-Json -Compress",
     )
 }
 

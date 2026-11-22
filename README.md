@@ -14,17 +14,17 @@ AgentMender is a local browser app for browsing and cleaning up Codex and Claude
 | Capability | macOS | Linux | Windows |
 | --- | --- | --- | --- |
 | Codex installation, archive, and export inventory | Yes | Yes | Yes |
-| Codex projects, sessions, transcripts, and descendant review | Yes | Unavailable | Unavailable |
-| Codex session and project-session deletion | Requires a supported native Codex executable | Unavailable | Unavailable |
-| Codex export deletion | Yes | Yes, with `openat2` required for directories | Unavailable |
+| Codex projects, sessions, transcripts, and descendant review | Yes | Unavailable | Verified on Windows 11 x64 |
+| Codex session and project-session deletion, with local reference cleanup | Requires a supported native Codex executable | Unavailable | Requires native Codex `0.171.0-alpha.13`. Verified on Windows 11 x64. |
+| Codex export deletion | Yes | Yes, with `openat2` required for directories | Verified on Windows 11 x64 |
 | Claude Code projects, sessions, transcripts, and storage | Yes | Yes | Yes |
-| Claude Code session deletion | Yes | Unavailable | Unavailable |
+| Claude Code session deletion | Yes | Unavailable | Verified on Windows 11 x64 with a JSONL fixture |
 
-Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. The app reports partial coverage where it detects gaps.
+Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, shared files, reparse points, and incomplete export groups can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
 
 ## Build and run locally
 
-Install Rust 1.89 or later with Cargo, a C compiler for bundled SQLite on macOS, and Node.js 22 with npm. From the repository root, build the React frontend first so Cargo can embed it in the executable.
+Install Rust 1.89 or later with Cargo and Node.js 22 with npm. Bundled SQLite and Zstandard require a C compiler on macOS and Windows. On Windows, install Visual Studio Build Tools with the Desktop development with C++ workload and a Windows SDK, then use an MSVC Rust toolchain matching your architecture. From the repository root, build the React frontend first so Cargo can embed it in the executable.
 
 ```sh
 npm ci --prefix ui
@@ -34,6 +34,18 @@ cargo build --locked --workspace
 ```
 
 On Windows, launch `target\debug\agentmender.exe ui`. The app serves the UI on IPv4 loopback and opens your default browser. Use `ui --no-open` to print the private launch URL or `--help` to see the options for selecting archives and executables.
+
+To launch directly in Google Chrome on Windows, run `scripts\sessionmender-chrome.cmd` from File Explorer or a Desktop shortcut. Keep the launcher window open while using SessionMender. Codex Desktop can be closed.
+
+If a completed deletion left a Desktop catalog entry, run `target\debug\agentmender.exe reconcile-desktop --confirm <UUID>`. Pass only the UUIDs from the earlier deletion result. The command checks that each UUID is absent from the selected Codex archive before reconciling its local Desktop entry. Use the same `--codex-root` override as the original operation if applicable.
+
+### Windows verification and release
+
+The native Windows x64 Codex CLI `0.171.0-alpha.13` from the Codex MSIX package was exercised directly with disposable databases and workspaces. It removed active JSONL, archived JSONL, and archived Zstandard rollouts and their SQLite rows. The Windows API and Chrome suite passed locally on Windows 11 x64 with that Codex version, a Claude Code JSONL fixture with version metadata `2.1.0`, a Desktop SQLite catalog fixture, and export fixtures. The CI matrix includes the suite on Windows x64 and ARM64. Windows ARM64 results are still pending. A Windows host that blocks locally built binaries cannot run the backend suite or the Rust tests there.
+
+To run the suite on Windows, build the app, set `SESSIONMENDER_TEST_CODEX` to that version of the native `codex.exe`, and set `SESSIONMENDER_TEST_CHROMIUM` to Edge or Chromium. Run `cargo test --locked --workspace` and `npm run test:windows --prefix ui`. The suite uses temporary roots for destructive operations.
+
+For distribution to Windows PCs with Smart App Control enabled, Authenticode signing with a trusted code-signing certificate and signature verification are separate release steps. [Microsoft Smart App Control signing guidance](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)
 
 ### 3D backgrounds
 

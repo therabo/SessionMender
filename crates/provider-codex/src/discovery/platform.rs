@@ -71,7 +71,27 @@ pub(super) fn cli_candidates(home: &Path) -> Vec<PathBuf> {
             );
         }
         if let Some(base) = environment("APPDATA") {
-            paths.push(base.join("npm").join("codex.cmd"));
+            let npm = base.join("npm/node_modules");
+            let architecture = if cfg!(target_arch = "aarch64") {
+                "aarch64"
+            } else {
+                "x86_64"
+            };
+            let node_arch = if cfg!(target_arch = "aarch64") {
+                "arm64"
+            } else {
+                "x64"
+            };
+            for parent in [
+                npm.join("@openai"),
+                npm.join("@openai/codex/node_modules/@openai"),
+            ] {
+                let vendor = parent
+                    .join(format!("codex-win32-{node_arch}"))
+                    .join("vendor")
+                    .join(format!("{architecture}-pc-windows-msvc"));
+                paths.extend([vendor.join("codex/codex.exe"), vendor.join("bin/codex.exe")]);
+            }
         }
     }
     paths
@@ -231,6 +251,14 @@ fn windows() -> (Vec<Installation>, Vec<Storage>) {
             let package = local.join("Packages").join(package.package_family_name);
             for (kind, suffix) in [
                 (StorageKind::DesktopProfile, "LocalCache/Roaming/Codex"),
+                (
+                    StorageKind::ArtifactSessionExports,
+                    "LocalCache/Roaming/Codex/artifact-sessions/exports",
+                ),
+                (
+                    StorageKind::ArtifactSessionExports,
+                    "LocalState/artifact-sessions/exports",
+                ),
                 (StorageKind::DesktopProfile, "LocalState"),
                 (StorageKind::Cache, "LocalCache/Local/Codex"),
             ] {

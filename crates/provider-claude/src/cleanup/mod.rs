@@ -1,20 +1,23 @@
 //! Permanent removal of provider-scoped local Claude files.
 mod history;
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+mod windows;
+#[cfg(unix)]
+use unix::{Object, names, unique_transcript};
+#[cfg(windows)]
+use windows::{Object, names, unique_transcript};
 
 use crate::{ClaudeAdapter, SessionEvidence, artifacts::exact_sidecar, read::verify};
 use agentmender_domain::SessionIdentity;
-use agentmender_provider_api::rewrite::{DIR_FLAGS, directory};
-use rustix::fs::{self, AtFlags, Dir, FileType, Mode, Stat};
 use serde::Serialize;
 use std::{
-    ffi::OsStr,
-    fs::File,
     io,
-    os::unix::ffi::OsStrExt,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 pub struct Target {
     #[serde(with = "agentmender_domain::path_serde")]
     root: PathBuf,
@@ -22,14 +25,10 @@ pub struct Target {
     relative_path: PathBuf,
     bytes: u64,
     #[serde(skip)]
-    identity: (i32, u64),
-    #[serde(skip)]
-    kind: FileType,
-    #[serde(skip)]
-    exclusive_file: bool,
+    object: Object,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 pub struct Plan {
     files: Vec<Target>,
     directories: Vec<Target>,
@@ -40,6 +39,7 @@ pub struct Plan {
     uuid_scope: Option<UuidScope>,
 }
 
+#[derive(PartialEq, Eq)]
 struct UuidScope {
     root: PathBuf,
     id: String,
@@ -56,7 +56,7 @@ fn uuid_is_unique<'a>(mut roots: impl Iterator<Item = &'a Path>, transcript: &Pa
     roots.all(|root| unique_transcript(root, transcript).unwrap_or(false))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 pub struct Outcome {
     pub removed_files: usize,
     pub removed_bytes: u64,
@@ -66,7 +66,7 @@ pub struct Outcome {
 
 impl Plan {
     pub fn delete(mut self) -> Outcome {
-        let uuid_scope = self.uuid_scope.take().filter(|scope| {
+        let mut uuid_scope = self.uuid_scope.take().filter(|scope| {
             if uuid_is_unique(scope.roots.iter().map(PathBuf::as_path), &scope.transcript) {
                 return true;
             }
@@ -81,7 +81,29 @@ impl Plan {
             history_rows: 0,
             errors: self.notes.into_iter().map(str::to_owned).collect(),
         };
+        let namespace_files = uuid_scope
+            .as_ref()
+            .map_or(self.files.len(), |scope| scope.namespace_files);
+        let namespace_directories = uuid_scope
+            .as_ref()
+            .map_or(self.directories.len(), |scope| scope.namespace_directories);
+        let mut recheck = |errors: &mut Vec<String>| {
+            if uuid_scope.as_ref().is_some_and(|scope| {
+                !uuid_is_unique(scope.roots.iter().map(PathBuf::as_path), &scope.transcript)
+            }) {
+                uuid_scope = None;
+                errors.push(AMBIGUOUS_UUID.into());
+            }
+            uuid_scope.is_some()
+        };
+        let mut shared_files = true;
         for (index, target) in self.files.into_iter().enumerate() {
+            if index == namespace_files {
+                shared_files = recheck(&mut outcome.errors);
+            }
+            if index >= namespace_files && !shared_files {
+                continue;
+            }
             match target.delete() {
                 Ok(bytes) => {
                     outcome.removed_files += 1;
@@ -97,7 +119,12 @@ impl Plan {
                 }
             }
         }
-        for target in self.directories.into_iter().rev() {
+        let shared_directories =
+            self.directories.len() > namespace_directories && recheck(&mut outcome.errors);
+        for (index, target) in self.directories.into_iter().enumerate().rev() {
+            if index >= namespace_directories && !shared_directories {
+                continue;
+            }
             if let Err(error) = target.delete()
                 && error.kind() != io::ErrorKind::NotFound
             {
@@ -106,7 +133,9 @@ impl Plan {
                     .push(format!("{}: {error}", target.relative_path.display()));
             }
         }
-        if let Some(scope) = uuid_scope {
+        if recheck(&mut outcome.errors)
+            && let Some(scope) = uuid_scope
+        {
             match history::remove_rows(&scope.root, &scope.id) {
                 Ok(count) => outcome.history_rows = count,
                 Err(error) => outcome.errors.push(format!("history.jsonl: {error}")),
@@ -136,6 +165,7 @@ impl ClaudeAdapter {
             uuid_scope: None,
         };
         plan.add_file(root, &transcript)?;
+        verify(root, &transcript, &evidence.revision).map_err(|_| io::ErrorKind::InvalidData)?;
         let id = &identity.native_id;
         let namespace = transcript
             .parent()
@@ -195,12 +225,11 @@ impl Plan {
 
     fn add_file(&mut self, root: &Path, path: &Path) -> io::Result<()> {
         let relative = relative_to(root, path)?;
-        let (parent, name) = open_parent(root, relative)?;
-        let info = fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
-        if FileType::from_raw_mode(info.st_mode) != FileType::RegularFile || info.st_nlink != 1 {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
-        self.add(Target::new(root, relative, &info, true));
+        self.add(Target::new(
+            root,
+            relative,
+            Object::inspect(root, relative, true)?,
+        ));
         Ok(())
     }
 
@@ -211,11 +240,9 @@ impl Plan {
     }
 
     fn sidecars(&mut self, root: &Path, namespace: &Path, id: &str) -> io::Result<()> {
-        let (parent, name) = open_parent(root, relative_to(root, namespace)?)?;
-        let dir = open_child_dir(&parent, name)?;
-        for entry in Dir::read_from(&dir)? {
-            let entry = entry?;
-            let name = OsStr::from_bytes(entry.file_name().to_bytes());
+        let mut entries = names(root, relative_to(root, namespace)?)?;
+        entries.sort_unstable();
+        for name in entries {
             if name
                 .to_str()
                 .and_then(|name| name.strip_prefix(id))
@@ -228,7 +255,7 @@ impl Plan {
     }
 
     fn add(&mut self, target: Target) {
-        if target.kind == FileType::Directory {
+        if target.object.directory {
             self.directories.push(target);
         } else {
             self.logical_bytes = self.logical_bytes.saturating_add(target.bytes);
@@ -251,124 +278,34 @@ impl Plan {
 
     fn visit(&mut self, root: &Path, path: &Path, pending: &mut Vec<PathBuf>) -> io::Result<()> {
         let relative = relative_to(root, path)?;
-        let (parent, name) = open_parent(root, relative)?;
-        let info = fs::statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
-        let kind = FileType::from_raw_mode(info.st_mode);
-        if info.st_dev != fs::fstat(&parent)?.st_dev {
-            return Err(io::ErrorKind::PermissionDenied.into());
-        }
-        self.add(Target::new(root, relative, &info, false));
-        if kind == FileType::Directory {
-            let dir = open_child_dir(&parent, name)?;
-            for entry in Dir::read_from(&dir)? {
-                let entry = entry?;
-                let name = entry.file_name().to_bytes();
-                if name != b"." && name != b".." {
-                    pending.push(path.join(OsStr::from_bytes(name)));
-                }
-            }
+        let object = Object::inspect(root, relative, false)?;
+        let directory = object.directory;
+        self.add(Target::new(root, relative, object));
+        if directory {
+            let mut entries = names(root, relative)?;
+            entries.sort_unstable();
+            pending.extend(entries.into_iter().rev().map(|name| path.join(name)));
         }
         Ok(())
     }
 }
 
-fn unique_transcript(root: &Path, selected: &Path) -> io::Result<bool> {
-    let projects = match directory(&root.join("projects")) {
-        Ok(projects) => projects,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
-        Err(error) => return Err(error),
-    };
-    let transcript_name = selected
-        .file_name()
-        .expect("recognized transcript filename");
-    for entry in Dir::read_from(&projects)? {
-        let entry = entry?;
-        let name = OsStr::from_bytes(entry.file_name().to_bytes());
-        if name == "."
-            || name == ".."
-            || root.join("projects").join(name).join(transcript_name) == selected
-        {
-            continue;
-        }
-        let info = fs::statat(&projects, name, AtFlags::SYMLINK_NOFOLLOW)?;
-        if FileType::from_raw_mode(info.st_mode) == FileType::Directory {
-            let namespace = open_child_dir(&projects, name)?;
-            match fs::statat(&namespace, transcript_name, AtFlags::SYMLINK_NOFOLLOW) {
-                Ok(_) => return Ok(false),
-                Err(rustix::io::Errno::NOENT) => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-    }
-    Ok(true)
-}
-
 impl Target {
-    fn new(root: &Path, relative: &Path, info: &Stat, exclusive_file: bool) -> Self {
+    fn new(root: &Path, relative: &Path, object: Object) -> Self {
         Self {
             root: root.to_owned(),
             relative_path: relative.to_owned(),
-            bytes: logical_bytes(info),
-            identity: (info.st_dev, info.st_ino),
-            kind: FileType::from_raw_mode(info.st_mode),
-            exclusive_file,
+            bytes: object.bytes,
+            object,
         }
     }
 
     fn delete(&self) -> io::Result<u64> {
-        let (parent, name) = open_parent(&self.root, &self.relative_path)?;
-        let current = fs::statat(&parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
-        if (current.st_dev, current.st_ino) != self.identity
-            || (self.exclusive_file && current.st_nlink != 1)
-            || FileType::from_raw_mode(current.st_mode) != self.kind
-        {
-            return Err(io::Error::other("Risorsa cambiata dopo l’anteprima."));
-        }
-        let flags = if self.kind == FileType::Directory {
-            AtFlags::REMOVEDIR
-        } else {
-            AtFlags::empty()
-        };
-        fs::unlinkat(parent, name, flags)?;
-        Ok(logical_bytes(&current))
-    }
-}
-
-fn logical_bytes(info: &Stat) -> u64 {
-    if FileType::from_raw_mode(info.st_mode) == FileType::RegularFile && info.st_nlink == 1 {
-        info.st_size.try_into().unwrap_or_default()
-    } else {
-        0
+        self.object.remove(&self.root, &self.relative_path)
     }
 }
 
 fn relative_to<'a>(root: &Path, path: &'a Path) -> io::Result<&'a Path> {
     path.strip_prefix(root)
         .map_err(|_| io::ErrorKind::InvalidInput.into())
-}
-
-fn open_child_dir(parent: &File, name: &OsStr) -> io::Result<File> {
-    let dir = fs::openat(parent, name, DIR_FLAGS, Mode::empty())?;
-    if fs::fstat(&dir)?.st_dev != fs::fstat(parent)?.st_dev {
-        return Err(io::Error::other(
-            "Percorso su un volume estraneo all’archivio.",
-        ));
-    }
-    Ok(File::from(dir))
-}
-
-fn open_parent<'a>(root: &Path, relative: &'a Path) -> io::Result<(File, &'a OsStr)> {
-    let name = relative.file_name().ok_or(io::ErrorKind::InvalidInput)?;
-    let parent = relative.parent().ok_or(io::ErrorKind::InvalidInput)?;
-    if !relative
-        .components()
-        .all(|part| matches!(part, Component::Normal(_)))
-    {
-        return Err(io::ErrorKind::InvalidInput.into());
-    }
-    let mut dir = directory(root)?;
-    for component in parent.components() {
-        dir = open_child_dir(&dir, component.as_os_str())?;
-    }
-    Ok((dir, name))
 }

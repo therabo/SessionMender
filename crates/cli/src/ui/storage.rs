@@ -1,5 +1,5 @@
 //! Export inventory and permanent removal in a separate authorization namespace.
-use super::{ApiError, App, read, token};
+use super::{ApiError, App, read, removal::REVIEW_AGE, token};
 use agentmender_provider_codex::exports::{Group, Inventory, Protection, Size};
 use axum::{
     Json,
@@ -30,13 +30,14 @@ pub(super) struct ExportState {
 struct Review {
     receipt: String,
     groups: Vec<Group>,
+    expires: Instant,
 }
 
 fn state(app: &App) -> Result<MutexGuard<'_, ExportState>, ApiError> {
     app.exports.try_lock().map_err(|error| match error {
         TryLockError::WouldBlock => ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Inventario export occupato. Riprova tra poco.",
+            "Inventario export occupato. Riprova tra poco.".into(),
         ),
         TryLockError::Poisoned(_) => ApiError::internal(),
     })
@@ -218,6 +219,7 @@ pub(super) async fn preview(
             exports.review = Some(Review {
                 receipt: receipt.clone(),
                 groups: groups.clone(),
+                expires: Instant::now() + REVIEW_AGE,
             });
             Some(receipt)
         } else {
@@ -254,6 +256,7 @@ struct Preserved {
     item: Removed,
     reason: &'static str,
     error: bool,
+    removed_entries: usize,
 }
 
 #[derive(Default, Serialize)]
@@ -273,11 +276,15 @@ pub(super) async fn confirm(
         ));
     }
     read(app, move |app| {
+        let _mutation = app.mutations.lock().map_err(|_| ApiError::internal())?;
         let mut exports = state(app)?;
         let review = exports
             .review
             .take_if(|review| review.receipt == receipt)
             .ok_or_else(|| ApiError::conflict("Apri una nuova anteprima export."))?;
+        if review.expires <= Instant::now() {
+            return Err(ApiError::conflict("Anteprima export scaduta."));
+        }
         let mut outcome = Outcome::default();
         for group in review.groups {
             let result = group.remove();
@@ -288,10 +295,11 @@ pub(super) async fn confirm(
             };
             match result {
                 Ok(()) => outcome.deleted.push(item),
-                Err(reason) => outcome.not_deleted.push(Preserved {
+                Err(error) => outcome.not_deleted.push(Preserved {
                     item,
-                    reason,
+                    reason: error.reason,
                     error: group.removal_available,
+                    removed_entries: error.removed_entries,
                 }),
             }
         }

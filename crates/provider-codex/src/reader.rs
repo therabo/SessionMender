@@ -54,7 +54,7 @@ impl OpenTranscript {
         let anchor = SourceAnchor {
             locator: locator.map(Path::to_path_buf),
             path,
-            revision: stamp(&metadata),
+            revision: stamp(&file)?,
         };
         Ok(Self {
             file,
@@ -64,7 +64,7 @@ impl OpenTranscript {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(super) fn current_anchor(
     identity: &SessionIdentity,
     locator: Option<&Path>,
@@ -108,11 +108,13 @@ pub(super) fn hash(bytes: &[u8]) -> String {
             .collect::<String>()
     )
 }
-pub(super) fn stamp(m: &fs::Metadata) -> String {
+pub(super) fn stamp(file: &fs::File) -> Result<String, ProviderError> {
+    #[cfg(unix)]
+    let m = file.metadata().map_err(|_| unavailable())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        format!(
+        Ok(format!(
             "{}:{}:{}:{}:{}:{}:{}:{}",
             m.dev(),
             m.ino(),
@@ -122,11 +124,12 @@ pub(super) fn stamp(m: &fs::Metadata) -> String {
             m.mtime_nsec(),
             m.ctime(),
             m.ctime_nsec()
-        )
+        ))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        format!("{}:{:?}", m.len(), m.modified())
+        let item = filesystem::Item::from_file(file).map_err(|_| unavailable())?;
+        Ok(format!("{item:?}"))
     }
 }
 pub(super) fn open_transcript(
@@ -134,6 +137,12 @@ pub(super) fn open_transcript(
     locator: Option<&Path>,
 ) -> Result<(fs::File, PathBuf), ProviderError> {
     let path = locator.ok_or_else(|| content_limit("missing_supported_rollout_locator"))?;
+    #[cfg(windows)]
+    let normalized = filesystem::Directory::open(root)
+        .and_then(|directory| directory.scoped_path(path))
+        .map_err(|_| content_limit("unsupported_rollout_location"))?;
+    #[cfg(windows)]
+    let path = normalized.as_path();
     let relative = path
         .strip_prefix(root)
         .map_err(|_| content_limit("rollout_locator_outside_root"))?;
@@ -257,7 +266,7 @@ pub(super) fn header(
     Ok((header_bytes.len(), format))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ObservedSource {
     Main,
@@ -265,7 +274,7 @@ pub(super) enum ObservedSource {
     Other,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum SourceValue {
@@ -273,7 +282,7 @@ enum SourceValue {
     Structured { subagent: Option<SubagentSource> },
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SubagentSource {
@@ -284,7 +293,7 @@ enum SubagentSource {
     Other(String),
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl ObservedSource {
     fn from_marker(source: Option<&SourceValue>) -> Result<Self, ProviderError> {
         match source {
@@ -323,7 +332,7 @@ impl ObservedSource {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 struct RelationshipHeader {
     #[serde(rename = "type")]
@@ -331,7 +340,7 @@ struct RelationshipHeader {
     payload: RelationshipMeta,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 pub(super) struct RelationshipMeta {
     pub id: String,
@@ -347,13 +356,13 @@ pub(super) struct RelationshipMeta {
     pub history_base: Option<HistoryBase>,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 pub(super) struct HistoryBase {
     pub thread_id: String,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 impl RelationshipMeta {
     pub fn source(&self) -> Result<ObservedSource, ProviderError> {
         ObservedSource::from_marker(self.source.as_ref())
@@ -378,7 +387,7 @@ impl RelationshipMeta {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(super) fn relationship_header(
     file: &fs::File,
     path: &Path,
@@ -693,7 +702,7 @@ fn scan(
         None
     };
     drop(reader);
-    if transcript.anchor.revision != stamp(&file.metadata().map_err(|_| unavailable())?)
+    if transcript.anchor.revision != stamp(file)?
         || transcript.anchor
             != OpenTranscript::new(identity, transcript.anchor.locator.as_deref())?.anchor
     {

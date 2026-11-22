@@ -17,7 +17,7 @@ pub struct Revision {
     #[cfg(unix)]
     physical: (u64, u64, i64, i64),
     #[cfg(windows)]
-    physical: (u64, u64),
+    physical: filesystem::Item,
     #[cfg(windows)]
     edges: [u8; 32],
 }
@@ -33,7 +33,7 @@ impl Revision {
             #[cfg(unix)]
             physical: (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()),
             #[cfg(windows)]
-            physical: filesystem::windows_file_identity(_file)?,
+            physical: filesystem::Item::from_file(_file)?,
             #[cfg(windows)]
             edges: {
                 use sha2::{Digest, Sha256};
@@ -55,8 +55,10 @@ impl Revision {
     }
 
     pub(crate) fn filesystem_identity(&self) -> Option<String> {
-        #[cfg(any(unix, windows))]
+        #[cfg(unix)]
         return Some(format!("{}:{}", self.physical.0, self.physical.1));
+        #[cfg(windows)]
+        return Some(format!("{:?}", self.physical.identity));
         #[cfg(not(any(unix, windows)))]
         None
     }

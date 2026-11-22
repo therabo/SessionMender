@@ -1,58 +1,21 @@
 //! Rewrite local prompt history under Claude's canonical directory lock.
-use agentmender_provider_api::rewrite::{self, DIR_FLAGS, directory};
-use rustix::fs::{self, AtFlags, Mode, Timespec, Timestamps, UTIME_NOW, UTIME_OMIT};
+#[cfg(unix)]
+mod unix;
+use agentmender_provider_api::rewrite::{self, directory};
 use std::{
-    fs::File,
     io,
     path::Path,
     sync::mpsc::{self, RecvTimeoutError},
     thread,
     time::Duration,
 };
+#[cfg(unix)]
+use unix::acquire;
+#[cfg(windows)]
+use windows::acquire;
 
 const HISTORY: &str = "history.jsonl";
 const LOCK: &str = "history.jsonl.lock";
-
-struct HistoryLock<'a> {
-    root: &'a File,
-    handle: File,
-    identity: (i32, u64),
-}
-
-impl HistoryLock<'_> {
-    fn held(&self) -> bool {
-        fs::statat(self.root, LOCK, AtFlags::SYMLINK_NOFOLLOW)
-            .is_ok_and(|stat| (stat.st_dev, stat.st_ino) == self.identity)
-    }
-
-    fn refresh(&self) -> io::Result<()> {
-        if !self.held() {
-            return Err(io::Error::other("Lock della cronologia cambiato."));
-        }
-        fs::futimens(
-            &self.handle,
-            &Timestamps {
-                last_access: Timespec {
-                    tv_sec: 0,
-                    tv_nsec: UTIME_OMIT,
-                },
-                last_modification: Timespec {
-                    tv_sec: 0,
-                    tv_nsec: UTIME_NOW,
-                },
-            },
-        )?;
-        Ok(())
-    }
-}
-
-impl Drop for HistoryLock<'_> {
-    fn drop(&mut self) {
-        if self.held() {
-            let _ = fs::unlinkat(self.root, LOCK, AtFlags::REMOVEDIR);
-        }
-    }
-}
 
 pub(super) fn count_rows(path: &Path, id: &str) -> io::Result<usize> {
     let file = rewrite::open_file(&directory(path)?, HISTORY)?;
@@ -61,47 +24,34 @@ pub(super) fn count_rows(path: &Path, id: &str) -> io::Result<usize> {
 
 pub(super) fn remove_rows(path: &Path, id: &str) -> io::Result<usize> {
     let root = directory(path)?;
-    if matches!(
-        fs::statat(&root, HISTORY, AtFlags::SYMLINK_NOFOLLOW),
-        Err(rustix::io::Errno::NOENT)
-    ) {
+    let Some(lock) = acquire(&root)? else {
         return Ok(0);
-    }
-    fs::mkdirat(&root, LOCK, Mode::RUSR | Mode::WUSR | Mode::XUSR).map_err(|error| {
-        if error == rustix::io::Errno::EXIST {
-            io::Error::other("Cronologia occupata. Le righe sono state conservate.")
-        } else {
-            error.into()
-        }
-    })?;
-    let handle = fs::openat(&root, LOCK, DIR_FLAGS, Mode::empty())?;
-    let observed = fs::fstat(&handle)?;
-    let lock = HistoryLock {
-        root: &root,
-        handle: File::from(handle),
-        identity: (observed.st_dev, observed.st_ino),
     };
-    with_heartbeat(&lock, || {
-        rewrite::replace(
-            &root,
-            HISTORY,
-            |input, output| rewrite::filter_jsonl(input, output, |line| matches_id(line, id)),
-            || lock.refresh(),
-        )
-    })
+    with_heartbeat(
+        || lock.refresh(),
+        || {
+            rewrite::replace(
+                &root,
+                HISTORY,
+                |input, output| rewrite::filter_jsonl(input, output, |line| matches_id(line, id)),
+                || lock.refresh(),
+            )
+        },
+    )
 }
 
 fn with_heartbeat<T>(
-    lock: &HistoryLock<'_>,
+    refresh: impl Fn() -> io::Result<()> + Sync,
     rewrite: impl FnOnce() -> io::Result<T>,
 ) -> io::Result<T> {
     thread::scope(|scope| {
         let (stop, receiver) = mpsc::channel::<()>();
         // Claude's proper-lockfile treats the directory as stale after 10 seconds.
+        let refresh = &refresh;
         scope.spawn(move || {
             while let Err(RecvTimeoutError::Timeout) = receiver.recv_timeout(Duration::from_secs(2))
             {
-                if lock.refresh().is_err() {
+                if refresh().is_err() {
                     break;
                 }
             }
@@ -121,4 +71,29 @@ fn matches_id(line: &[u8], id: &str) -> bool {
         .or_else(|| row.get("session_id"))
         .and_then(serde_json::Value::as_str)
         == Some(id)
+}
+
+#[cfg(windows)]
+mod windows {
+    use super::{HISTORY, LOCK};
+    use agentmender_provider_api::{filesystem::Directory, rewrite::DirectoryLock};
+    use std::io;
+
+    pub(super) fn acquire(root: &Directory) -> io::Result<Option<DirectoryLock>> {
+        match root.inspect(&root.path().join(HISTORY)) {
+            Ok(item) if !item.directory => {}
+            Ok(_) => return Err(io::ErrorKind::InvalidData.into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        DirectoryLock::create(root, LOCK)
+            .map(Some)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    io::Error::other("Cronologia occupata. Le righe sono state conservate.")
+                } else {
+                    error
+                }
+            })
+    }
 }

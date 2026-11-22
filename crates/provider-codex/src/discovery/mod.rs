@@ -3,7 +3,7 @@ mod platform;
 
 use agentmender_domain::{ProviderKind, canonical_uuid};
 use agentmender_provider_api::{ProviderLocation, filesystem, process};
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use same_file::Handle;
 use serde::Deserialize;
 use std::{
@@ -143,7 +143,18 @@ pub(crate) fn identity(path: &Path) -> Option<String> {
         let info = fs::symlink_metadata(path).ok()?;
         (info.dev(), info.ino()).hash(&mut hash);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let object = match path.parent() {
+            Some(parent) => filesystem::Directory::open(parent)
+                .ok()?
+                .inspect(path)
+                .ok()?,
+            None => filesystem::Directory::open(path).ok()?.item(),
+        };
+        (object.identity.volume, object.identity.id).hash(&mut hash);
+    }
+    #[cfg(not(any(unix, windows)))]
     Handle::from_path(path).ok()?.hash(&mut hash);
     Some(format!("{:016x}", hash.finish()))
 }
@@ -157,6 +168,47 @@ fn settings(root: &Path) -> Settings {
         .ok()
         .and_then(|bytes| toml::from_str::<Settings>(std::str::from_utf8(&bytes).ok()?).ok())
         .unwrap_or_default()
+}
+
+#[cfg(windows)]
+pub(crate) fn verified_read_root(
+    root: &Path,
+) -> Result<PathBuf, agentmender_provider_api::ProviderError> {
+    use agentmender_provider_api::ProviderError;
+    let directory = filesystem::Directory::open(root).map_err(|error| {
+        ProviderError::CapabilityUnavailable(format!(
+            "radice locale Codex non verificabile: {error}"
+        ))
+    })?;
+    let path = directory.path();
+    let config = path.join("config.toml");
+    let configured = match directory.inspect(&config) {
+        Ok(_) => {
+            let bytes = filesystem::read_bounded(path, &config, 256 * 1024)?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| {
+                ProviderError::CapabilityUnavailable("config.toml Codex non leggibile".into())
+            })?;
+            toml::from_str::<Settings>(text)
+                .map_err(|_| {
+                    ProviderError::CapabilityUnavailable(
+                        "config.toml Codex non riconosciuto".into(),
+                    )
+                })?
+                .sqlite_home
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(agentmender_provider_api::io_error(config, error)),
+    };
+    if let Some(sqlite_home) =
+        configured.or_else(|| env::var_os("CODEX_SQLITE_HOME").map(PathBuf::from))
+        && !filesystem::Directory::open(&sqlite_home)
+            .is_ok_and(|sqlite| sqlite.item().identity == directory.item().identity)
+    {
+        return Err(ProviderError::CapabilityUnavailable(
+            "associazione del database sqlite_home separato non verificabile".into(),
+        ));
+    }
+    Ok(path.to_owned())
 }
 
 fn archive_format(root: &Path) -> bool {

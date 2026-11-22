@@ -7,22 +7,17 @@ use axum::{
     extract::{Path, State},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+pub(super) const REVIEW_AGE: Duration = Duration::from_secs(120);
 
 pub(super) const PROTECTED: &str = "La sessione è protetta dalla configurazione di avvio.";
 
 pub(super) fn native_reason(app: &App) -> Option<&'static str> {
-    if app
-        .discovery
-        .location
-        .executable
-        .as_ref()
-        .is_some_and(|path| path.is_file())
-    {
-        None
-    } else {
-        Some("Eseguibile Codex non disponibile.")
-    }
+    app.codex_native_reason
 }
 
 pub(super) fn refusal(session: &Session, protected: &[String]) -> Option<&'static str> {
@@ -36,6 +31,8 @@ pub(super) struct CodexReview {
     key: String,
     project: bool,
     plan: DeletionPlan,
+    sessions: Vec<SessionIdentity>,
+    expires: Instant,
 }
 
 fn codex_review(
@@ -50,9 +47,7 @@ fn codex_review(
     let plan = app
         .codex
         .deletion_plan(sessions, &app.protected)
-        .map_err(|_| {
-            ApiError::conflict("Grafo Codex non verificabile o contenente una sessione protetta.")
-        })?;
+        .map_err(ApiError::conflict)?;
     let id = super::token()?;
     let view = serde_json::json!({ "review": id, "plan": &plan });
     *app.codex_review.lock().expect("Codex review") = Some(CodexReview {
@@ -60,6 +55,8 @@ fn codex_review(
         key,
         project,
         plan,
+        sessions: sessions.to_vec(),
+        expires: Instant::now() + REVIEW_AGE,
     });
     Ok(view)
 }
@@ -83,21 +80,24 @@ pub(super) async fn codex_project_preview(
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     read(app, move |app| {
-        let sessions =
-            app.inventory
-                .project(app, ProviderKind::Codex, &key, |app, _, project| {
-                    if let Some(reason) = ProjectView::new(app, project).removal_reason {
-                        return Err(ApiError::conflict(reason));
-                    }
-                    Ok(project
-                        .sessions
-                        .sessions()
-                        .map(|row| row.identity.clone())
-                        .collect::<Vec<_>>())
-                })??;
+        let sessions = project_members(app, &key)?;
         codex_review(app, key, true, &sessions)
     })
     .await
+}
+
+fn project_members(app: &App, key: &str) -> Result<Vec<SessionIdentity>, ApiError> {
+    app.inventory
+        .project(app, ProviderKind::Codex, key, |app, _, project| {
+            if let Some(reason) = ProjectView::new(app, project).removal_reason {
+                return Err(ApiError::conflict(reason));
+            }
+            Ok(project
+                .sessions
+                .sessions()
+                .map(|row| row.identity.clone())
+                .collect::<Vec<_>>())
+        })?
 }
 
 fn confirm_codex(
@@ -114,14 +114,32 @@ fn confirm_codex(
             plan.key == key && plan.project == project && Some(&plan.id) == review.as_ref()
         })
         .ok_or_else(|| ApiError::conflict("Apri una nuova anteprima Codex."))?;
+    if review.expires <= Instant::now() {
+        return Err(ApiError::conflict("Anteprima Codex scaduta."));
+    }
+    if project {
+        app.inventory.invalidate(ProviderKind::Codex);
+        let current = project_members(app, &key)?;
+        let mut reviewed = review.sessions;
+        let mut current = current;
+        reviewed.sort();
+        current.sort();
+        if reviewed != current {
+            return Err(ApiError::conflict(
+                "Le sessioni del progetto sono cambiate. Apri una nuova anteprima.",
+            ));
+        }
+    }
     let Deletion {
         native_succeeded,
         verified_absent,
+        requested_absent,
         messages,
         errors,
-    } = app.codex.delete_reviewed(review.plan).map_err(|_| {
-        ApiError::conflict("Comando nativo Codex non disponibile per l’archivio selezionato.")
-    })?;
+    } = app
+        .codex
+        .delete_reviewed(review.plan)
+        .map_err(ApiError::conflict)?;
     let mut message = format!(
         "Comandi nativi riusciti · {native_succeeded}. UUID verificati assenti · {verified_absent}."
     );
@@ -132,22 +150,24 @@ fn confirm_codex(
         message.push(' ');
         message.push_str(detail);
     }
-    let mut view = result(native_succeeded.max(verified_absent), message, errors);
+    let mut view = result(verified_absent, message, errors);
     view.codex_counts = Some(CodexCounts {
         native_succeeded,
         verified_absent,
+        requested_absent,
     });
     Ok(view)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(super) struct ClaudeReview {
     id: String,
     key: String,
     plan: agentmender_provider_claude::cleanup::Plan,
+    expires: Instant,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(super) async fn claude_preview(
     State(app): State<Arc<App>>,
     Path(key): Path<String>,
@@ -164,7 +184,12 @@ pub(super) async fn claude_preview(
             })?;
         let id = super::token()?;
         let view = serde_json::json!({ "review": id, "plan": &plan });
-        *app.claude_review.lock().expect("Claude review") = Some(ClaudeReview { id, key, plan });
+        *app.claude_review.lock().expect("Claude review") = Some(ClaudeReview {
+            id,
+            key,
+            plan,
+            expires: Instant::now() + REVIEW_AGE,
+        });
         Ok(view)
     })
     .await
@@ -190,6 +215,7 @@ pub(super) struct ResultView {
 struct CodexCounts {
     native_succeeded: usize,
     verified_absent: usize,
+    requested_absent: bool,
 }
 
 fn result(removed: usize, message: String, errors: Vec<String>) -> ResultView {
@@ -217,10 +243,11 @@ pub(super) async fn session(
     }
     let provider = provider(&name)?;
     read(app, move |app| {
+        let _mutation = app.mutations.lock().map_err(|_| ApiError::internal())?;
         let outcome = match provider {
             ProviderKind::Codex => confirm_codex(app, key, false, request.review)?,
             ProviderKind::Claude => {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 {
                     let review = {
                         let mut slot = app.claude_review.lock().expect("Claude review");
@@ -229,7 +256,25 @@ pub(super) async fn session(
                         })
                         .ok_or_else(|| ApiError::conflict("Apri una nuova anteprima Claude."))?
                     };
-                    let outcome = review.plan.delete();
+                    if review.expires <= Instant::now() {
+                        return Err(ApiError::conflict("Anteprima Claude scaduta."));
+                    }
+                    app.inventory.invalidate(ProviderKind::Claude);
+                    let (session, evidence) = app.inventory.selected_claude(app, &key)?;
+                    let current = app
+                        .claude
+                        .removal_plan(&session.identity, &evidence)
+                        .map_err(|_| {
+                            ApiError::conflict(
+                                "Transcript Claude cambiato. Apri una nuova anteprima.",
+                            )
+                        })?;
+                    if current != review.plan {
+                        return Err(ApiError::conflict(
+                            "Le risorse Claude sono cambiate. Apri una nuova anteprima.",
+                        ));
+                    }
+                    let outcome = current.delete();
                     result(
                         outcome.removed_files,
                         format!(
@@ -239,7 +284,7 @@ pub(super) async fn session(
                         outcome.errors,
                     )
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", windows)))]
                 return Err(ApiError::conflict(
                     agentmender_provider_claude::REMOVAL_NOTICE,
                 ));
@@ -260,6 +305,7 @@ pub(super) async fn project(
         return Err(ApiError::bad("Conferma l’eliminazione definitiva."));
     }
     read(app, move |app| {
+        let _mutation = app.mutations.lock().map_err(|_| ApiError::internal())?;
         let outcome = confirm_codex(app, key, true, request.review)?;
         app.inventory.invalidate(ProviderKind::Codex);
         Ok(outcome)

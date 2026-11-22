@@ -1,6 +1,6 @@
 //! Inventory, conversation previews and scoped session removal for Claude Code.
 mod artifacts;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub mod cleanup;
 mod diagnostics;
 mod local;
@@ -13,6 +13,8 @@ pub use diagnostics::{Access, Reconciliation};
 pub use local::{Cursor, SessionEvidence};
 pub use storage::{REMOVAL_NOTICE, RootSource, RootView};
 pub use usage::StorageInventory;
+
+pub const CLEANUP_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
 use agentmender_domain::{ProviderKind, SessionIdentity, uuid_shape};
 use agentmender_provider_api::{ProviderError, filesystem, process};

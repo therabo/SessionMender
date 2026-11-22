@@ -141,14 +141,14 @@ fn desktop(root: &Path) -> Result<Desktop, ProviderError> {
         }
         Err(error) => return Err(error),
     };
-    let before = reader::stamp(&file.metadata().map_err(|_| unavailable())?);
+    let before = reader::stamp(&file)?;
     let mut bytes = Vec::new();
     (&mut file)
         .take((MAX_DESKTOP_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| unavailable())?;
     let latest = filesystem::open_source_read(root, &path)?;
-    if before != reader::stamp(&latest.metadata().map_err(|_| unavailable())?) {
+    if before != reader::stamp(&latest)? {
         return Err(stale());
     }
     if bytes.len() > MAX_DESKTOP_BYTES {
@@ -198,6 +198,24 @@ fn merge_desktop(catalog: &mut ProjectCatalog, root: &Path, desktop: Desktop, na
     let migration = desktop
         .app_server_project_id_by_legacy_project_id_by_host
         .get(&host);
+    #[cfg(windows)]
+    let migration = {
+        let normal = host
+            .strip_prefix(r"local:\\?\")
+            .map(|path| format!("local:{path}"));
+        let alternate = normal.as_ref().and_then(|host| {
+            desktop
+                .app_server_project_id_by_legacy_project_id_by_host
+                .get(host)
+        });
+        if migration
+            .zip(alternate)
+            .is_some_and(|(first, second)| first != second)
+        {
+            catalog.incomplete = true;
+        }
+        migration.or(alternate)
+    };
     let mut mapped = BTreeSet::new();
     let mut locators = BTreeMap::new();
     for (id, project) in &desktop.local_projects {

@@ -43,7 +43,7 @@ pub(super) fn page(
     key: &str,
     query: TranscriptQuery,
 ) -> Result<TranscriptView, ApiError> {
-    if provider == ProviderKind::Codex && !cfg!(target_os = "macos") {
+    if provider == ProviderKind::Codex && !agentmender_provider_codex::CONTENT_SUPPORTED {
         return Err(ApiError::conflict(
             "Anteprima del transcript non disponibile per questo provider.",
         ));

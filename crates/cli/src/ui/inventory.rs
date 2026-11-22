@@ -28,7 +28,7 @@ pub(super) enum Coverage {
 pub(super) struct ProviderView {
     pub id: ProviderKind,
     pub coverage: Coverage,
-    pub archive_error: Option<&'static str>,
+    pub archive_error: Option<String>,
     pub total: usize,
     pub sessions_observed_only: bool,
     pub project_count: usize,
@@ -41,7 +41,7 @@ pub(super) struct ProviderView {
 
 struct Observation {
     coverage: Coverage,
-    error: Option<&'static str>,
+    error: Option<String>,
     inventory: InventoryObservation,
     sessions_incomplete: bool,
     claude_evidence: BTreeMap<SessionIdentity, SessionEvidence>,
@@ -79,14 +79,14 @@ impl Observation {
                     (
                         Coverage::Unavailable,
                         Some(
-                            "Il provider è installato, ma l'archivio configurato non è stato trovato.",
+                            "Il provider è installato, ma l'archivio configurato non è stato trovato.".to_owned(),
                         ),
                         InventoryObservation::default(),
                     )
                 } else {
                     (
                         Coverage::NotDetected,
-                        Some("Installazione e archivio locale non rilevati."),
+                        Some("Installazione e archivio locale non rilevati.".to_owned()),
                         InventoryObservation::default(),
                     )
                 }
@@ -95,30 +95,43 @@ impl Observation {
                 Ok(observation) => (Coverage::Available, None, observation),
                 Err(ProviderError::PermissionDenied(_)) => (
                     Coverage::Unavailable,
-                    Some("Accesso negato all’archivio del provider."),
+                    Some("Accesso negato all’archivio del provider.".to_owned()),
                     InventoryObservation::default(),
                 ),
                 Err(ProviderError::InvalidScope(reason)) if reason == "stale_codex_source" => (
                     Coverage::Unavailable,
-                    Some("L’archivio è cambiato durante la lettura. Aggiorna l’inventario."),
+                    Some(
+                        "L’archivio è cambiato durante la lettura. Aggiorna l’inventario."
+                            .to_owned(),
+                    ),
                     InventoryObservation::default(),
                 ),
-                Err(_) if !cfg!(target_os = "macos") => (
+                Err(_) if !agentmender_provider_codex::CONTENT_SUPPORTED => (
                     Coverage::Unavailable,
                     Some(
-                        "La lettura confinata dell’archivio Codex è attualmente disponibile su macOS.",
+                        "Lettura dell’archivio Codex non disponibile su questa piattaforma."
+                            .to_owned(),
                     ),
+                    InventoryObservation::default(),
+                ),
+                Err(ProviderError::CapabilityUnavailable(reason)) => (
+                    Coverage::Unavailable,
+                    Some(reason),
                     InventoryObservation::default(),
                 ),
                 Err(_) => (
                     Coverage::Unavailable,
-                    Some("L’archivio non è leggibile o usa un formato non riconosciuto."),
+                    Some(
+                        "L’archivio non è leggibile o usa un formato non riconosciuto.".to_owned(),
+                    ),
                     InventoryObservation::default(),
                 ),
             },
             _ => (
                 Coverage::Unavailable,
-                Some("La directory dell’archivio non è accessibile o è un collegamento."),
+                Some(
+                    "La directory dell’archivio non è accessibile o è un collegamento.".to_owned(),
+                ),
                 InventoryObservation::default(),
             ),
         };
@@ -143,12 +156,12 @@ impl Observation {
         {
             (
                 Coverage::Unavailable,
-                Some("Nessun archivio di progetto accessibile."),
+                Some("Nessun archivio di progetto accessibile.".to_owned()),
             )
         } else {
             (
                 Coverage::NotDetected,
-                Some("Installazione e archivio locale non rilevati."),
+                Some("Installazione e archivio locale non rilevati.".to_owned()),
             )
         };
         Self {
@@ -210,7 +223,8 @@ impl Snapshot {
                 removal_reason,
             },
             conversation_preview: can_read
-                && (provider == ProviderKind::Claude || cfg!(target_os = "macos")),
+                && (provider == ProviderKind::Claude
+                    || agentmender_provider_codex::CONTENT_SUPPORTED),
             index,
             recents: grouped.recents,
             ids,
@@ -367,12 +381,20 @@ impl Inventories {
     ) -> Result<DetailView, ApiError> {
         self.with(app, provider, |snapshot| {
             let session = snapshot.selected(key)?;
+            let mut view = SessionView::new(app, snapshot, session);
+            if provider == ProviderKind::Codex && view.removal_reason.is_none() {
+                view.removal_reason = app
+                    .codex
+                    .deletion_plan(std::slice::from_ref(&session.identity), &app.protected)
+                    .err();
+            }
             Ok(DetailView {
-                session: SessionView::new(app, snapshot, session),
+                session: view,
                 conversation_preview: snapshot.conversation_preview
                     && session.transcript_bytes.is_some(),
                 claude_cleanup_supported: provider == ProviderKind::Claude
-                    && cfg!(target_os = "macos"),
+                    && agentmender_provider_claude::CLEANUP_SUPPORTED
+                    && snapshot.claude_evidence.contains_key(&session.identity),
             })
         })
     }
@@ -504,7 +526,7 @@ struct SessionView {
     transcript_bytes: Option<u64>,
     kind: SessionKind,
     protected: bool,
-    removal_reason: Option<&'static str>,
+    removal_reason: Option<String>,
 }
 
 impl SessionView {
@@ -515,7 +537,8 @@ impl SessionView {
         let removal_reason = snapshot
             .info
             .removal_reason
-            .or_else(|| removal::refusal(session, &app.protected));
+            .or_else(|| removal::refusal(session, &app.protected))
+            .map(str::to_owned);
         Self {
             key: key(session),
             native_id: meta.identity.native_id.clone(),

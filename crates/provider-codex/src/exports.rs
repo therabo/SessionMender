@@ -7,7 +7,7 @@ use rustix::fs::{self as scoped, AtFlags, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
-use std::{collections::HashMap, os::unix::fs::MetadataExt, path::Component, sync::Arc};
+use std::{collections::HashMap, os::unix::fs::MetadataExt, path::Component};
 use std::{
     collections::HashSet,
     fs, io,
@@ -15,13 +15,16 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(any(unix, windows))]
+use std::sync::Arc;
+
 const MAX_ENTRIES: usize = 350_000;
 const MAX_GROUPS: usize = 4_096;
 const MAX_MANIFEST_BYTES: usize = 8_192;
 const MARKER: &str = ".artifact-session-publication.json";
 const LEASE: &str = ".artifact-session-publication-lease.json";
 const CHANGED: &str = "Il gruppo o la sua root è cambiato dopo l’anteprima.";
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const OVERLAP: &str = "Il gruppo si sovrappone a un’altra area di storage rilevata.";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,15 +66,17 @@ pub struct Group {
     pub reason: &'static str,
     pub removal_available: bool,
     pub complete: bool,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[serde(skip)]
     target: Option<RemovalTarget>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Clone)]
 struct RemovalTarget {
-    source: Arc<(Storage, fs::Metadata)>,
+    source: Arc<Storage>,
+    #[cfg(unix)]
+    root_identity: (u64, u64),
     path: PathBuf,
     budget: Budget,
 }
@@ -220,9 +225,13 @@ fn status(protection: Protection) -> &'static str {
     }
 }
 
+#[cfg(not(windows))]
 type ObservedEntries = Vec<(PathBuf, fs::Metadata)>;
+#[cfg(windows)]
+type ObservedEntries = Vec<(PathBuf, filesystem::Item)>;
 
 fn collect(
+    #[cfg(windows)] root: &Path,
     path: &Path,
     meta: &fs::Metadata,
     budget: &mut Budget,
@@ -232,6 +241,11 @@ fn collect(
     #[cfg(not(unix))]
     let _ = &allocation;
     let mut result = Scan::default();
+    #[cfg(windows)]
+    let Ok(scope) = filesystem::Directory::open(root) else {
+        result.incomplete = true;
+        return result;
+    };
     let mut queue = vec![(path.to_owned(), 0usize, meta.clone())];
     let mut revision = Sha256::new();
     let root_device = device(meta);
@@ -240,12 +254,33 @@ fn collect(
         revision.update(encoded.len().to_le_bytes());
         revision.update(encoded);
         revision.update(format!("{:?}", fingerprint(&metadata)));
+        #[cfg(not(windows))]
         if let Some(entries) = observed.as_deref_mut() {
             entries.push((entry.clone(), metadata.clone()));
         }
         if filesystem::is_link(&metadata) {
             result.links += 1;
             continue;
+        }
+        #[cfg(windows)]
+        let item = match scope.inspect(&entry) {
+            Ok(item)
+                if item.directory == metadata.is_dir()
+                    && (item.directory || item.bytes == metadata.len()) =>
+            {
+                item
+            }
+            _ => {
+                result.incomplete = true;
+                continue;
+            }
+        };
+        #[cfg(windows)]
+        {
+            revision.update(format!("{item:?}"));
+            if let Some(entries) = observed.as_deref_mut() {
+                entries.push((entry.clone(), item));
+            }
         }
         if device(&metadata) != root_device {
             result.incomplete = true;
@@ -298,6 +333,11 @@ fn collect(
             result.incomplete = true;
             continue;
         }
+        #[cfg(windows)]
+        let Ok(_pinned) = scope.child(&entry) else {
+            result.incomplete = true;
+            continue;
+        };
         let Ok(entries) = fs::read_dir(&entry) else {
             result.incomplete = true;
             continue;
@@ -319,6 +359,10 @@ fn collect(
         }
         children.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         queue.extend(children);
+        #[cfg(windows)]
+        if scope.inspect(&entry).ok() != Some(item) {
+            result.incomplete = true;
+        }
         if !fs::symlink_metadata(&entry).is_ok_and(|current| fingerprint(&current) == before) {
             result.incomplete = true;
         }
@@ -368,7 +412,17 @@ fn group(
     let metadata = fs::symlink_metadata(path).ok();
     let mut scan = metadata
         .as_ref()
-        .map(|meta| collect(path, meta, budget, allocation, observed))
+        .map(|meta| {
+            collect(
+                #[cfg(windows)]
+                &storage.path,
+                path,
+                meta,
+                budget,
+                allocation,
+                observed,
+            )
+        })
         .unwrap_or(Scan {
             incomplete: true,
             ..Scan::default()
@@ -463,9 +517,13 @@ fn group(
         linked_entries: scan.links,
         protection,
         reason: status(protection),
-        removal_available: cfg!(unix),
+        removal_available: cfg!(any(unix, windows))
+            && !matches!(
+                protection,
+                Protection::Shared | Protection::InUse | Protection::Incomplete
+            ),
         complete: !scan.incomplete,
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         target: None,
     }
 }
@@ -509,14 +567,19 @@ impl Inventory {
                 continue;
             };
             let before = fingerprint(&meta);
+            #[cfg(windows)]
+            let Ok(pinned_root) = filesystem::Directory::open(&root.path) else {
+                complete = false;
+                continue;
+            };
             let Ok(entries) = fs::read_dir(&root.path) else {
                 complete = false;
                 continue;
             };
             let first = groups.len();
-            #[cfg(unix)]
-            let source = Arc::new((root.clone(), meta));
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
+            let source = Arc::new(root.clone());
+            #[cfg(any(unix, windows))]
             let scope = removal_scope(storage, root);
             for item in entries {
                 if groups.len() >= MAX_GROUPS || !budget.take() {
@@ -528,10 +591,10 @@ impl Inventory {
                     continue;
                 };
                 let path = item.path();
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 let group_budget = budget;
                 let mut row = group(root, &path, &mut budget, &mut allocation, None);
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 {
                     let reason = match &scope {
                         Err(reason) => Some(*reason),
@@ -541,11 +604,16 @@ impl Inventory {
                         {
                             Some(OVERLAP)
                         }
+                        #[cfg(unix)]
                         Ok(_)
                             if !fs::symlink_metadata(&path)
-                                .is_ok_and(|entry| entry.dev() == source.1.dev()) =>
+                                .is_ok_and(|entry| entry.dev() == meta.dev()) =>
                         {
                             Some("Il gruppo è inaccessibile o su un altro volume.")
+                        }
+                        #[cfg(windows)]
+                        Ok(_) if pinned_root.inspect(&path).is_err() => {
+                            Some("Il gruppo è inaccessibile, condiviso o su un altro volume.")
                         }
                         Ok(_) => None,
                     };
@@ -555,12 +623,14 @@ impl Inventory {
                     } else {
                         row.target = Some(RemovalTarget {
                             source: source.clone(),
+                            #[cfg(unix)]
+                            root_identity: (meta.dev(), meta.ino()),
                             path,
                             budget: group_budget,
                         });
                     }
                 }
-                #[cfg(not(unix))]
+                #[cfg(not(any(unix, windows)))]
                 {
                     row.reason = "Eliminazione export non disponibile su questa piattaforma.";
                 }
@@ -610,7 +680,7 @@ fn export_kind(kind: StorageKind) -> bool {
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn removal_scope(storage: &[Storage], root: &Storage) -> Result<HashSet<String>, &'static str> {
     if root.kind == StorageKind::ArtifactSessionExports && !root.recognized {
         return Err("La root Artifact Session non è verificata.");
@@ -648,20 +718,35 @@ fn removal_scope(storage: &[Storage], root: &Storage) -> Result<HashSet<String>,
         .collect())
 }
 
+#[derive(Debug)]
+pub struct RemovalError {
+    pub reason: &'static str,
+    pub removed_entries: usize,
+}
+
+impl From<&'static str> for RemovalError {
+    fn from(reason: &'static str) -> Self {
+        Self {
+            reason,
+            removed_entries: 0,
+        }
+    }
+}
+
 impl Group {
     /// Re-observe only this group and remove only the observed entries.
-    pub fn remove(&self) -> Result<(), &'static str> {
+    pub fn remove(&self) -> Result<(), RemovalError> {
         if !self.removal_available {
-            return Err(self.reason);
+            return Err(self.reason.into());
         }
         #[cfg(unix)]
         {
             let target = self.target.as_ref().ok_or(CHANGED)?;
-            let (root, expected) = target.source.as_ref();
+            let root = target.source.as_ref();
             let dir = open_root(&root.path).map_err(removal_error)?;
             let current = dir.metadata().map_err(removal_error)?;
-            if (current.dev(), current.ino()) != (expected.dev(), expected.ino()) {
-                return Err(CHANGED);
+            if (current.dev(), current.ino()) != target.root_identity {
+                return Err(CHANGED.into());
             }
             let mut entries = Vec::new();
             // Reuse the preview's remaining entries so a truncated scan has the same scope.
@@ -673,13 +758,54 @@ impl Group {
                 &mut Allocation::default(),
                 Some(&mut entries),
             );
-            if current.key != self.key || identity(&root.path) != root.identity {
-                return Err(CHANGED);
+            if current.key != self.key
+                || identity(&root.path) != root.identity
+                || !current.removal_available
+            {
+                return Err(CHANGED.into());
             }
-            remove_observed(&dir, &mut entries.into_iter().peekable()).map_err(removal_error)
+            let mut removed = 0;
+            remove_observed(&dir, &mut entries.into_iter().peekable(), &mut removed).map_err(
+                |error| RemovalError {
+                    reason: removal_error(error),
+                    removed_entries: removed,
+                },
+            )
         }
-        #[cfg(not(unix))]
-        Err(self.reason)
+        #[cfg(windows)]
+        {
+            let target = self.target.as_ref().ok_or(CHANGED)?;
+            let root = target.source.as_ref();
+            let directory = filesystem::Directory::open(&root.path).map_err(removal_error)?;
+            if identity(&root.path) != root.identity {
+                return Err(CHANGED.into());
+            }
+            let mut entries = Vec::new();
+            let mut budget = target.budget;
+            let current = group(
+                root,
+                &target.path,
+                &mut budget,
+                &mut Allocation::default(),
+                Some(&mut entries),
+            );
+            if current.key != self.key || !current.removal_available {
+                return Err(CHANGED.into());
+            }
+            // A reverse preorder removes descendants before their directory.
+            // The kernel refuses directory deletion if any new entry appeared.
+            for (removed, (path, item)) in entries.into_iter().rev().enumerate() {
+                if let Err(error) = directory.remove(&path, item) {
+                    return Err(RemovalError {
+                        reason: removal_error(error),
+                        removed_entries: removed,
+                    });
+                }
+            }
+            Ok(())
+        }
+        #[cfg(not(any(unix, windows)))]
+        Err(self.reason.into())
     }
 }
 
@@ -714,6 +840,7 @@ fn same_object(current: &scoped::Stat, expected: &fs::Metadata) -> bool {
 fn remove_observed(
     parent: &fs::File,
     entries: &mut std::iter::Peekable<std::vec::IntoIter<(PathBuf, fs::Metadata)>>,
+    removed: &mut usize,
 ) -> io::Result<()> {
     let (path, expected) = entries.next().ok_or(io::ErrorKind::InvalidData)?;
     let name = path.file_name().ok_or(io::ErrorKind::InvalidData)?;
@@ -738,7 +865,7 @@ fn remove_observed(
             .peek()
             .is_some_and(|(child, _)| child.parent() == Some(&path))
         {
-            remove_observed(&dir, entries)?;
+            remove_observed(&dir, entries, removed)?;
         }
         let current = scoped::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
         if !same_object(&current, &expected) {
@@ -757,10 +884,11 @@ fn remove_observed(
         // Unlink the directory entry itself, including a symlink or a hardlink name.
         scoped::unlinkat(parent, name, AtFlags::empty())?;
     }
+    *removed += 1;
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn removal_error(error: io::Error) -> &'static str {
     match error.kind() {
         io::ErrorKind::PermissionDenied => "Permesso negato durante l’eliminazione.",
