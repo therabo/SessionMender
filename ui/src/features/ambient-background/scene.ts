@@ -1,49 +1,28 @@
 import {
-  AnimationMixer, Box3, DirectionalLight, Group, HemisphereLight, MathUtils, Mesh,
-  NeutralToneMapping, PerspectiveCamera, Scene, SkinnedMesh, SphereGeometry, Vector3, WebGLRenderer,
+  AnimationMixer, DirectionalLight, Group, HemisphereLight, MathUtils, Mesh,
+  MeshStandardMaterial, NeutralToneMapping, PerspectiveCamera, Scene, SkinnedMesh, SphereGeometry, Vector3, WebGLRenderer,
   type BufferGeometry, type Material, type Object3D, type Skeleton,
 } from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { clone } from 'three/addons/utils/SkeletonUtils.js'
 import { advanceBubble, createBubbleMotion, motionStep } from './bubbleMotion'
+import { depths, profiles, type SceneConfig } from './config'
 import { glass } from './glass'
+import { fitModel } from './model'
+
+export { scenes } from './config'
 
 const motion = '(prefers-reduced-motion: reduce)'
-const field = {
-  profiles: {
-    desktop: { bubbles: 12, mascots: 7, dpr: 1.5, pixels: 2_100_000, fps: 60 },
-    compact: { bubbles: 6, mascots: 2, dpr: 1.2, pixels: 1_050_000, fps: 30 },
-    phone: { bubbles: 5, mascots: 1, dpr: 1.1, pixels: 700_000, fps: 30 },
-  },
-  depth: {
-    near: { strength: 1, drift: 1, depthExtent: 0.42 },
-    middle: { strength: 0.76, drift: 0.76, depthExtent: 0.34 },
-    far: { strength: 0.38, drift: 0.50, depthExtent: 0.27 },
-  },
-  placements: [
-    { x: -0.66, y: 0.80, z: 2.6, radius: 0.77, depth: 'near', mascot: true, yaw: 0.28 },
-    { x: 0.78, y: 0.81, z: -1.2, radius: 0.73, depth: 'middle', mascot: true, yaw: -0.34 },
-    { x: 0.85, y: -0.75, z: 2.0, radius: 1.08, depth: 'near', mascot: true, yaw: -0.52 },
-    { x: -0.87, y: -0.56, z: -5.3, radius: 1.13, depth: 'far' },
-    { x: 0.92, y: 0.32, z: -3.7, radius: 0.51, depth: 'middle' },
-    { x: -0.94, y: 0.27, z: -6.6, radius: 0.53, depth: 'far' },
-    { x: 0.36, y: 0.83, z: -4.9, radius: 0.63, depth: 'middle', mascot: true, yaw: -0.19 },
-    { x: -0.58, y: 0.55, z: -9.2, radius: 0.77, depth: 'far' },
-    { x: 0.78, y: -0.31, z: -5.5, radius: 0.76, depth: 'middle' },
-    { x: -0.95, y: -0.86, z: -6.8, radius: 0.56, depth: 'far', mascot: true, yaw: 0.42 },
-    { x: 0.075, y: 0.67, z: -3.4, radius: 0.66, depth: 'middle', mascot: true, yaw: -0.15 },
-    { x: -0.20, y: -0.48, z: -2.1, radius: 0.90, depth: 'middle', mascot: true, yaw: 0.24 },
-  ],
-} as const
-
-export type ClaudeScene = {
+export type BubbleScene = {
   start: () => void
   pause: () => void
   dispose: () => void
 }
 
-export async function createScene(host: HTMLElement, bytes: ArrayBuffer, signal: AbortSignal, onLost: () => void): Promise<ClaudeScene> {
-  // The pinned GLB is self-contained. No decoders or texture requests are needed.
+export async function createScene(
+  host: HTMLElement, bytes: ArrayBuffer, config: SceneConfig, signal: AbortSignal, onLost: () => void,
+): Promise<BubbleScene> {
+  // Both pinned models are self-contained and need no decoders or texture requests.
   const model = await new GLTFLoader().parseAsync(bytes, '')
   signal.throwIfAborted()
 
@@ -80,7 +59,7 @@ export async function createScene(host: HTMLElement, bytes: ArrayBuffer, signal:
   let width = 0
   let height = 0
   let lateralScale = 1
-  let profile: (typeof field.profiles)[keyof typeof field.profiles] = field.profiles.desktop
+  let profile: (typeof profiles)[keyof typeof profiles] = profiles.desktop
   let disposed = false
   const resize = new ResizeObserver(() => size())
 
@@ -121,63 +100,62 @@ export async function createScene(host: HTMLElement, bytes: ArrayBuffer, signal:
     renderer = new WebGLRenderer({ canvas, context: gl, alpha: true })
     renderer.setClearColor(0, 0)
     renderer.toneMapping = NeutralToneMapping
-    renderer.toneMappingExposure = 0.91
+    renderer.toneMappingExposure = config.exposure
 
-    scene.add(new HemisphereLight('#ffe0ef', '#61406c', 1.91))
-    const key = new DirectionalLight('#fff0dd', 2.75)
-    key.position.set(-4, 8, 6)
-    const rim = new DirectionalLight('#f9a5d4', 2.10)
-    rim.position.set(5, 1, -5)
-    const fill = new DirectionalLight('#c8b5ff', 0.75)
-    fill.position.set(4, -2, 5)
-    scene.add(key, rim, fill)
-
-    const idle = model.animations.find(clip => clip.name === 'Clawd / Idle')
-    if (!idle) throw new Error('Clawd Idle clip missing')
-    const box = new Box3()
-    const envelope = new Box3()
-    const sampler = new AnimationMixer(model.scene)
-    sampler.clipAction(idle).play()
-    const steps = Math.ceil(idle.duration * 24)
-    for (let i = 0; i <= steps; i++) {
-      sampler.setTime(i / steps * idle.duration)
-      envelope.union(box.setFromObject(model.scene, true))
+    scene.add(new HemisphereLight(...config.hemisphere))
+    for (const [color, intensity, x, y, z] of config.lights) {
+      const light = new DirectionalLight(color, intensity)
+      light.position.set(x, y, z)
+      scene.add(light)
     }
-    sampler.stopAllAction()
-    sampler.uncacheRoot(model.scene)
-    const center = envelope.getCenter(new Vector3())
-    // Half of the envelope's diagonal bounds every sampled vertex at any yaw.
-    const fit = 1.56 / envelope.getSize(new Vector3()).length()
-    if (!Number.isFinite(fit) || fit <= 0) throw new Error('Invalid Clawd bounds')
+
+    const idle = model.animations.find(clip => clip.name === config.model.idle)
+    if (config.model.idle && !idle) throw new Error('Configured Idle clip missing')
+    const { center, fit } = fitModel(model.scene, config.model.maxRadius, idle)
+    const surface = config.model.defaultSurface
+    if (surface) {
+      for (const material of materials) {
+        if (material instanceof MeshStandardMaterial) {
+          material.roughness = surface.roughness
+          material.metalness = surface.metalness
+        }
+      }
+    }
 
     const sphere = new SphereGeometry(1, 40, 28)
     geometries.add(sphere)
     const shells = {
-      near: glass(field.depth.near.strength),
-      middle: glass(field.depth.middle.strength),
-      far: glass(field.depth.far.strength),
+      near: glass(depths.near.strength, config.glass),
+      middle: glass(depths.middle.strength, config.glass),
+      far: glass(depths.far.strength, config.glass),
     }
     for (const material of Object.values(shells)) materials.add(material)
 
-    field.placements.forEach((placement, index) => {
+    config.placements.forEach((placement, index) => {
       const group = new Group()
       const shell = new Mesh(sphere, shells[placement.depth])
       group.add(shell)
       const bubble: (typeof bubbles)[number] = {
-        group, anchor: new Vector3(), motion: createBubbleMotion(index, 'yaw' in placement ? placement.yaw : 0), index,
+        group, anchor: new Vector3(), motion: createBubbleMotion(index + config.motionSeed, placement.yaw ?? 0), index,
       }
-      if ('mascot' in placement) {
+      if (placement.mascot) {
         const avatar = clone(model.scene)
         collect(avatar)
         avatar.scale.setScalar(fit)
         avatar.position.copy(center).multiplyScalar(-fit)
+        if (config.model.facingYaw) {
+          avatar.rotateY(config.model.facingYaw)
+          avatar.position.applyQuaternion(avatar.quaternion)
+        }
         avatar.traverse(object => {
           if (object instanceof SkinnedMesh) object.frustumCulled = false
         })
-        const mixer = new AnimationMixer(avatar)
-        mixer.clipAction(idle).play()
-        mixer.setTime(idle.duration * (0.12 + index * 0.29))
-        mixers.set(group, { mixer, avatar })
+        if (idle) {
+          const mixer = new AnimationMixer(avatar)
+          mixer.clipAction(idle).play()
+          mixer.setTime(idle.duration * (0.12 + index * 0.29))
+          mixers.set(group, { mixer, avatar })
+        }
         group.add(avatar)
         bubble.mascot = avatar
       }
@@ -200,7 +178,7 @@ export async function createScene(host: HTMLElement, bytes: ArrayBuffer, signal:
     height = nextHeight
     const phone = width < 540
     const compact = width < 760 || coarse.matches || navigator.hardwareConcurrency <= 4
-    profile = phone ? field.profiles.phone : compact ? field.profiles.compact : field.profiles.desktop
+    profile = phone ? profiles.phone : compact ? profiles.compact : profiles.desktop
     camera.aspect = width / height
     camera.updateProjectionMatrix()
     const dpr = Math.min(devicePixelRatio, profile.dpr, Math.sqrt(profile.pixels / (width * height)))
@@ -212,12 +190,13 @@ export async function createScene(host: HTMLElement, bytes: ArrayBuffer, signal:
     const halfFov = Math.tan(MathUtils.degToRad(camera.fov / 2))
     let mascots = 0
     for (const { group, anchor, motion, mascot, index } of bubbles) {
-      const placement = field.placements[index]
+      const placement = config.placements[index]
       group.visible = index < profile.bubbles
       if (mascot) mascot.visible = group.visible && mascots++ < profile.mascots
       const halfHeight = (camera.position.z - placement.z) * halfFov
-      const x = phone && index === 0 ? 0.83 : phone && index === 1 ? -0.98 : placement.x
-      const y = phone && index === 1 ? -0.38 : compact && index < 2 ? 0.85 : placement.y
+      const phoneAnchor = phone ? placement.phone : undefined
+      const x = phoneAnchor?.x ?? placement.x
+      const y = phoneAnchor?.y ?? (compact ? placement.compactY : undefined) ?? placement.y
       const halfWidth = halfHeight * camera.aspect
       anchor.set(x * halfWidth, y * halfHeight, placement.z)
       // Allocate less room outward for spheres intentionally placed at the edge.
@@ -231,9 +210,9 @@ export async function createScene(host: HTMLElement, bytes: ArrayBuffer, signal:
     stepRemainder += dt
     while (stepRemainder >= motionStep) {
       stepRemainder -= motionStep
-      const time = ++motionTicks * motionStep
+      const time = ++motionTicks * motionStep + config.motionPhase
       for (const { anchor, motion, index } of bubbles) {
-        const depth = field.depth[field.placements[index].depth]
+        const depth = depths[config.placements[index].depth]
         advanceBubble(motion, anchor, time, depth.drift, depth.depthExtent, lateralScale)
       }
     }

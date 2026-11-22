@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && vite build"
+    "build": "tsc --noEmit && vite build",
+    "test:background": "node --test tests/ambient-background.test.mjs",
+    "test:background:browser": "node --test tests/ambient-background.browser.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.73.0",
@@ -15,6 +17,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/three": "0.186.0",
+    "playwright-core": "1.65.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.8"
   }

@@ -35,7 +35,15 @@ cargo build --locked --workspace
 
 On Windows, launch `target\debug\agentmender.exe ui`. The app serves the UI on IPv4 loopback and opens your default browser. Use `ui --no-open` to print the private launch URL or `--help` to see the options for selecting archives and executables.
 
-### Optional Claude Code background preview
+### Optional 3D backgrounds
+
+To preview Codex, point SessionMender at the original local asset. The loopback server checks the file size, GLB format and pinned SHA-256 before serving it.
+
+```sh
+SESSIONMENDER_CODEX_GLB="$HOME/Desktop/codex.glb" ./target/debug/agentmender ui
+```
+
+Use `codex.glb` for local evaluation while its redistribution terms are unclear. Set both model variables in the same launch to preview both providers.
 
 The preview uses `assets/Clawd-Animator.glb` from [Clawd Little Worlds at `aefeaa7`](https://github.com/leonvanzyl/clawd-little-worlds/tree/aefeaa7f6a9c8126338c7da5b975371a0bb28f04). Keep this model for local evaluation while its redistribution terms are unclear. The application verifies the pinned file and serves it from loopback at runtime.
 
@@ -46,7 +54,9 @@ curl --fail --location --output ui/.local/Clawd-Animator.glb \
 SESSIONMENDER_CLAWD_GLB="$PWD/ui/.local/Clawd-Animator.glb" ./target/debug/agentmender ui
 ```
 
-The model stays outside the Vite build and Rust executable. Three.js loads on demand for Claude Code and owns the canvas and its GPU resources. The original Claude background remains available on every build, including when the model is absent or WebGL is unavailable.
+Both GLBs stay outside the Vite build and Rust executable. Three.js loads on demand and shares the renderer setup and motion simulation across the two provider configurations. During a switch, the outgoing canvas pauses and fades before the next context is created. The original provider background is used when its model or WebGL2 is unavailable.
+
+Run `npm run test:background --prefix ui` for the scene configuration and model-fit tests. With both model variables set and the app built, run `npm run test:background:browser --prefix ui` for the browser tests. On macOS the browser tests use the standard Google Chrome installation. Set `SESSIONMENDER_TEST_CHROMIUM` to the executable for another Chromium installation.
 
 ## Permanent deletion
 

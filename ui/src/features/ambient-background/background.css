@@ -1,0 +1,12 @@
+.ambient-background {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity var(--motion-provider-switch) var(--ease-in-out);
+}
+[data-provider="codex"] .ambient-background[data-theme="codex"][data-visible="true"],
+[data-provider="claude"] .ambient-background[data-theme="claude"][data-visible="true"] { opacity: 1; }
+.ambient-background canvas { display: block; width: 100%; height: 100%; }

@@ -1,6 +1,7 @@
 //! Loopback-only transport and browser authorization for the local UI.
 mod browser;
 mod inventory;
+mod model_asset;
 mod removal;
 mod storage;
 mod transcript;
@@ -16,7 +17,6 @@ use agentmender_provider_claude::ClaudeAdapter;
 use agentmender_provider_codex::{CodexAdapter, discovery::Discovery};
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
@@ -24,13 +24,13 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use self::{
     inventory::{
         DetailView, Filter, Inventories, PageView, ProjectView, ProjectsPage, ProviderView,
     },
+    model_asset::LocalModels,
     transcript::{TranscriptCursors, TranscriptQuery, TranscriptView},
 };
 
@@ -44,7 +44,7 @@ struct App {
     origin: String,
     launch: Mutex<Option<String>>,
     authorization: String,
-    clawd_model: Option<Bytes>,
+    models: LocalModels,
     codex: CodexAdapter,
     claude: ClaudeAdapter,
     limit: usize,
@@ -304,27 +304,9 @@ fn asset(content_type: &'static str, bytes: &'static str) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, content_type)], bytes)
 }
 
-fn local_clawd_model() -> Option<Bytes> {
-    const SIZE: usize = 191_740;
-    const SHA256: [u8; 32] = [
-        0xe9, 0x13, 0x51, 0x2e, 0xb3, 0xf8, 0xfe, 0xed, 0x18, 0x67, 0x3e, 0xe3, 0x73, 0xe6, 0xae,
-        0x1b, 0xf2, 0x4d, 0x4c, 0x55, 0x8f, 0x6a, 0xdd, 0x37, 0xa2, 0x9e, 0x64, 0x5b, 0x33, 0x11,
-        0x91, 0x56,
-    ];
-    let path = PathBuf::from(std::env::var_os("SESSIONMENDER_CLAWD_GLB")?);
-    let bytes =
-        agentmender_provider_api::filesystem::read_bounded(path.parent()?, &path, SIZE).ok()?;
-    (bytes.len() == SIZE && Sha256::digest(&bytes).as_slice() == SHA256).then(|| Bytes::from(bytes))
-}
-
 async fn design_asset(State(app): State<Arc<App>>, Path(name): Path<String>) -> Response {
-    if name == "Clawd-Animator.glb" {
-        return match &app.clawd_model {
-            Some(bytes) => {
-                ([(header::CONTENT_TYPE, "model/gltf-binary")], bytes.clone()).into_response()
-            }
-            None => StatusCode::NOT_FOUND.into_response(),
-        };
+    if let Some(bytes) = app.models.get(&name) {
+        return ([(header::CONTENT_TYPE, "model/gltf-binary")], bytes.clone()).into_response();
     }
     match embedded_asset(&name) {
         Some((content_type, bytes)) => {
@@ -416,7 +398,7 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
     }
     let launch = token().map_err(|_| error("Unable to create a local authorization ticket."))?;
     let bearer = token().map_err(|_| error("Unable to create a local browser session."))?;
-    let clawd_model = local_clawd_model();
+    let models = LocalModels::load();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -435,7 +417,7 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
             origin,
             launch: Mutex::new(Some(launch.clone())),
             authorization: format!("Bearer {bearer}"),
-            clawd_model,
+            models,
             codex: config.codex,
             discovery: config.discovery,
             exports: Mutex::default(),
