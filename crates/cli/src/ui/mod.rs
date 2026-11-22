@@ -17,6 +17,7 @@ use agentmender_provider_claude::ClaudeAdapter;
 use agentmender_provider_codex::{CodexAdapter, discovery::Discovery};
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
@@ -30,7 +31,6 @@ use self::{
     inventory::{
         DetailView, Filter, Inventories, PageView, ProjectView, ProjectsPage, ProviderView,
     },
-    model_asset::LocalModels,
     transcript::{TranscriptCursors, TranscriptQuery, TranscriptView},
 };
 
@@ -44,7 +44,7 @@ struct App {
     origin: String,
     launch: Mutex<Option<String>>,
     authorization: String,
-    models: LocalModels,
+    clawd_model: Option<Bytes>,
     codex: CodexAdapter,
     claude: ClaudeAdapter,
     limit: usize,
@@ -305,7 +305,9 @@ fn asset(content_type: &'static str, bytes: &'static str) -> impl IntoResponse {
 }
 
 async fn design_asset(State(app): State<Arc<App>>, Path(name): Path<String>) -> Response {
-    if let Some(bytes) = app.models.get(&name) {
+    if name == "Clawd-Animator.glb"
+        && let Some(bytes) = &app.clawd_model
+    {
         return ([(header::CONTENT_TYPE, "model/gltf-binary")], bytes.clone()).into_response();
     }
     match embedded_asset(&name) {
@@ -398,7 +400,7 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
     }
     let launch = token().map_err(|_| error("Unable to create a local authorization ticket."))?;
     let bearer = token().map_err(|_| error("Unable to create a local browser session."))?;
-    let models = LocalModels::load();
+    let clawd_model = model_asset::load_clawd();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -417,7 +419,7 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
             origin,
             launch: Mutex::new(Some(launch.clone())),
             authorization: format!("Bearer {bearer}"),
-            models,
+            clawd_model,
             codex: config.codex,
             discovery: config.discovery,
             exports: Mutex::default(),

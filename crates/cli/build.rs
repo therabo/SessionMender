@@ -30,6 +30,9 @@ fn main() {
             Some("svg") => "image/svg+xml",
             Some("png") => "image/png",
             Some("woff2") => "font/woff2",
+            Some("glb") if path.file_name().is_some_and(|name| name == "codex.glb") => {
+                "model/gltf-binary"
+            }
             Some("js") => "text/javascript; charset=utf-8",
             _ => continue,
         };

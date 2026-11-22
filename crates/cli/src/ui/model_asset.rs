@@ -5,30 +5,8 @@ use axum::body::Bytes;
 
 const MAX_MODEL_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) struct LocalModels {
-    clawd: Option<Bytes>,
-    codex: Option<Bytes>,
-}
-
-impl LocalModels {
-    pub(super) fn load() -> Self {
-        Self {
-            clawd: load("SESSIONMENDER_CLAWD_GLB"),
-            codex: load("SESSIONMENDER_CODEX_GLB"),
-        }
-    }
-
-    pub(super) fn get(&self, name: &str) -> Option<&Bytes> {
-        match name {
-            "Clawd-Animator.glb" => self.clawd.as_ref(),
-            "codex.glb" => self.codex.as_ref(),
-            _ => None,
-        }
-    }
-}
-
-fn load(variable: &str) -> Option<Bytes> {
-    let path = PathBuf::from(std::env::var_os(variable)?);
+pub(super) fn load_clawd() -> Option<Bytes> {
+    let path = PathBuf::from(std::env::var_os("SESSIONMENDER_CLAWD_GLB")?);
     let bytes = read_bounded(path.parent()?, &path, MAX_MODEL_BYTES).ok()?;
     validate(bytes)
 }

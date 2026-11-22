@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -15,18 +15,14 @@ const chromiumPath = process.env.SESSIONMENDER_TEST_CHROMIUM
   ?? (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined)
 const canvas = '.ambient-background canvas'
 
-async function open(t, { noGl = false, invalidModel = false, clock = false } = {}) {
+async function open(t, { noGl = false, missingClawd = false, clock = false } = {}) {
   const archive = await mkdtemp(join(tmpdir(), 'sessionmender-background-'))
   t.after(() => rm(archive, { recursive: true, force: true }))
   const codex = join(archive, 'codex')
   const claude = join(archive, 'claude')
   await Promise.all([mkdir(codex), mkdir(claude)])
   const env = { ...process.env }
-  if (invalidModel) {
-    env.SESSIONMENDER_CODEX_GLB = join(archive, 'invalid.glb')
-    await writeFile(env.SESSIONMENDER_CODEX_GLB, 'invalid model')
-    delete env.SESSIONMENDER_CLAWD_GLB
-  }
+  if (missingClawd) delete env.SESSIONMENDER_CLAWD_GLB
 
   const server = spawn(binary, ['--codex-root', codex, '--claude-root', claude, 'ui', '--no-open'], {
     env, stdio: ['ignore', 'pipe', 'inherit'],
@@ -169,13 +165,18 @@ test('switching pauses, releases and reuses the cached model bytes', async t => 
   await page.getByRole('button', { name: 'Refresh sessions' }).click()
 })
 
-test('an invalid or missing model and unavailable WebGL retain the original UI', async t => {
-  const invalid = await open(t, { invalidModel: true })
-  assert.equal((await invalid.page.request.get('/assets/codex.glb')).status(), 404)
-  assert.equal((await invalid.page.request.get('/assets/Clawd-Animator.glb')).status(), 404)
-  await choose(invalid.page, 'Claude Code')
-  assert.equal(await invalid.page.locator(canvas).count(), 0)
-  await invalid.page.getByRole('button', { name: 'Refresh sessions' }).click()
+test('Codex serves its bundled GLB and the UI works without a Clawd model or WebGL', async t => {
+  const { page } = await open(t, { missingClawd: true })
+  const bundled = await page.request.get('/assets/codex.glb')
+  const model = await readFile(new URL('../public/assets/codex.glb', import.meta.url))
+  assert.equal(bundled.status(), 200)
+  assert.equal(bundled.headers()['content-type'], 'model/gltf-binary')
+  assert.ok((await bundled.body()).equals(model))
+  await active(page, 'codex').waitFor()
+  assert.equal((await page.request.get('/assets/Clawd-Animator.glb')).status(), 404)
+  await choose(page, 'Claude Code')
+  await page.locator(canvas).waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: 'Refresh sessions' }).click()
 
   const noGl = await open(t, { noGl: true })
   await noGl.page.waitForFunction(() => window.backgroundQA.attempts === 1)
