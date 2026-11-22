@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import logo from '../assets/logo.png'
 import { SegmentedControl } from '../components/ui/glass'
 import { AmbientBackground } from '../features/ambient-background/AmbientBackground'
 import type { Provider } from '../lib/api/contracts'
@@ -16,7 +17,7 @@ export function AppShell({ provider, onProviderChange, children }: {
     <div className="aurora" data-theme="claude" aria-hidden />
     <AmbientBackground provider={provider} />
     <header className="app-header">
-      <div className="app-mark" role="img" aria-label="SessionMender">S</div>
+      <img className="app-mark" src={logo} alt="SessionMender" width={68} height={68} />
       <SegmentedControl className="provider-switch" label="Provider" items={providers} value={provider} onChange={onProviderChange} />
     </header>
     <main className="workspace">{children}</main>

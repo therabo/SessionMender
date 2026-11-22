@@ -28,6 +28,7 @@ fn main() {
     for path in entries {
         let content_type = match path.extension().and_then(|extension| extension.to_str()) {
             Some("svg") => "image/svg+xml",
+            Some("png") => "image/png",
             Some("woff2") => "font/woff2",
             Some("js") => "text/javascript; charset=utf-8",
             _ => continue,
