@@ -37,7 +37,7 @@ On Windows, launch `target\debug\agentmender.exe ui`. The app serves the UI on I
 
 ### Optional 3D backgrounds
 
-To preview Codex, point SessionMender at the original local asset. The loopback server checks the file size, GLB format and pinned SHA-256 before serving it.
+To preview Codex, point SessionMender at the local GLB. The loopback server checks the GLB header and accepts models up to 16 MiB.
 
 ```sh
 SESSIONMENDER_CODEX_GLB="$HOME/Desktop/codex.glb" ./target/debug/agentmender ui
@@ -45,7 +45,7 @@ SESSIONMENDER_CODEX_GLB="$HOME/Desktop/codex.glb" ./target/debug/agentmender ui
 
 Use `codex.glb` for local evaluation while its redistribution terms are unclear. Set both model variables in the same launch to preview both providers.
 
-The preview uses `assets/Clawd-Animator.glb` from [Clawd Little Worlds at `aefeaa7`](https://github.com/leonvanzyl/clawd-little-worlds/tree/aefeaa7f6a9c8126338c7da5b975371a0bb28f04). Keep this model for local evaluation while its redistribution terms are unclear. The application verifies the pinned file and serves it from loopback at runtime.
+The example uses `assets/Clawd-Animator.glb` from [Clawd Little Worlds at `aefeaa7`](https://github.com/leonvanzyl/clawd-little-worlds/tree/aefeaa7f6a9c8126338c7da5b975371a0bb28f04). Keep this model for local evaluation while its redistribution terms are unclear. Restart SessionMender after replacing either model.
 
 ```sh
 mkdir -p ui/.local
