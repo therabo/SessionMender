@@ -30,12 +30,6 @@ export function ExportRemoval({ keys, onClose, onSettled }: {
     return () => controller.abort()
   }, [keys])
 
-  useEffect(() => {
-    if (state.status !== 'success') return
-    const timer = window.setTimeout(onClose, 1200)
-    return () => window.clearTimeout(timer)
-  }, [state.status, onClose])
-
   async function remove(receipt: string) {
     const signal = operation.current?.signal
     if (submitted.current || !signal || signal.aborted) return

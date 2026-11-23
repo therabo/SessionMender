@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useId, useRef, useState, type ReactNode } from 'react'
 import { Check } from 'lucide-react'
 import trashIcon from '../../assets/confirm-trash.svg'
 import closeIcon from '../../assets/confirm-close.svg'
@@ -19,6 +19,7 @@ export function ConfirmationDialog({ title, description, children, onClose, onCo
   const completionTitle = useRef<HTMLHeadingElement>(null)
   const closeTimer = useRef<number | undefined>(undefined)
   const [closing, setClosing] = useState(false)
+  const closeCompleted = useEffectEvent(onClose)
   const titleId = useId()
   const descriptionId = useId()
   useEffect(() => {
@@ -35,8 +36,14 @@ export function ConfirmationDialog({ title, description, children, onClose, onCo
   }, [])
 
   useEffect(() => {
-    if (completed) completionTitle.current?.focus({ preventScroll: true })
-    else if (finished && !busy) ref.current?.querySelector<HTMLButtonElement>('[data-cancel]')?.focus()
+    if (!completed) return
+    completionTitle.current?.focus({ preventScroll: true })
+    const timer = window.setTimeout(() => closeCompleted(), 1200)
+    return () => window.clearTimeout(timer)
+  }, [completed])
+
+  useEffect(() => {
+    if (!completed && finished && !busy) ref.current?.querySelector<HTMLButtonElement>('[data-cancel]')?.focus()
   }, [completed, finished, busy])
 
   function dismiss() {

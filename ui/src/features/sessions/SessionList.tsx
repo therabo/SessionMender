@@ -52,6 +52,7 @@ export function SessionGroup({ title, context, count, expanded, onToggle, onRemo
 type ListProps = {
   path: string; query: string; revision: number; label: string; selected?: string; expanded?: boolean
   onSelect: (key: string, opener: HTMLElement) => void
+  onLoad?: (path: string) => void
 }
 
 function SessionRow({ session, selected, onSelect }: {
@@ -73,12 +74,13 @@ function SessionRow({ session, selected, onSelect }: {
   </li>
 }
 
-export function SessionList({ path, query, revision, label, selected, onSelect, expanded = true }: ListProps) {
+export function SessionList({ path, query, revision, label, selected, onSelect, expanded = true, onLoad }: ListProps) {
   const [pageIndex, setPageIndex] = useState(0)
   const { loading, error, page } = usePagedResource(path, query, pageIndex, pageSize, revision, listSessions, { enabled: expanded })
   useEffect(() => {
     if (!loading && !error && page && pageIndex > 0 && pageIndex * pageSize >= page.total) setPageIndex(0)
   }, [loading, error, page, pageIndex])
+  useEffect(() => { if (!loading) onLoad?.(path) }, [loading, onLoad, path])
 
   if (error) return <Notice tone="error">{error}</Notice>
   if (loading) return <LoadingState title="Loading sessions" />
@@ -92,13 +94,14 @@ export function SessionList({ path, query, revision, label, selected, onSelect, 
   </>
 }
 
-export function UnassignedSessions({ path, query, revision, label, selected, onSelect, count, emptyTitle }: ListProps & { count: number; emptyTitle?: string }) {
+export function UnassignedSessions({ path, query, revision, label, selected, onSelect, onLoad, count, emptyTitle }: ListProps & { count: number; emptyTitle?: string }) {
   const [expanded, setExpanded] = useState(true)
   const [pageIndex, setPageIndex] = useState(0)
   const { loading, error, page } = usePagedResource(path, query, pageIndex, pageSize, revision, listSessions, { delay: 180 })
   useEffect(() => {
     if (!loading && !error && page && pageIndex > 0 && pageIndex * pageSize >= page.total) setPageIndex(0)
   }, [loading, error, page, pageIndex])
+  useEffect(() => { if (!loading) onLoad?.(path) }, [loading, onLoad, path])
 
   if (error) return <Notice tone="error">{error}</Notice>
   if (loading) return emptyTitle ? <LoadingState title="Loading unassigned sessions" /> : null

@@ -44,6 +44,7 @@
   padding-inline: 1px;
 }
 .inventory-body > .notice { margin-block-end: 8px; }
+.sessions-panel .inventory-body { scrollbar-gutter: stable; }
 .export-selection {
   flex: none;
   display: flex;
@@ -224,6 +225,7 @@
 @media (max-width: 840px) {
   .split-workspace, .split-workspace[data-split="true"] { display: block; }
   .inventory-panel { min-height: 450px; }
+  .sessions-panel { height: max(450px, 65dvh); }
   .export-selection {
     position: sticky;
     bottom: 0;

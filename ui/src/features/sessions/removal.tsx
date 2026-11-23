@@ -11,19 +11,12 @@ type Review = ClaudeReview | CodexReview
 
 function ReviewedResources({ review }: { review: Review }) {
   if ('trees' in review.plan) {
-    const descendants = review.plan.trees.flatMap(tree => tree.descendants)
-    return <>
-      <p>{numberLabel(review.plan.trees.length)} selected {review.plan.trees.length === 1 ? 'session' : 'sessions'} · {numberLabel(descendants.length)} verified descendants</p>
-      {descendants.length > 0 && <details>
-        <summary>Verified descendants</summary>
-        <ul className="removal-targets">
-          {descendants.map(child => <li key={child.id}><code>{child.id}</code><br />
-            Level {numberLabel(child.depth)} · Parent <code>{child.parent}</code>
-            {child.archived && ' · Archived'}{!child.present && ' · Transcript and record unavailable'}
-          </li>)}
-        </ul>
-      </details>}
-    </>
+    const targets = review.plan.trees.flatMap(tree => [
+      tree.id,
+      ...tree.descendants.filter(child => child.present).map(child => child.id),
+    ])
+    const count = new Set(targets).size
+    return <p>{numberLabel(count)} {count === 1 ? 'session' : 'sessions'} in the removal plan</p>
   }
 
   const { directories, files, logical_bytes, history_matches, notes } = review.plan
@@ -83,19 +76,23 @@ export function RemovalDialog({ path, title, project = false, onClose, onChange 
   }
 
   const finished = !!(result || error)
-  return <ConfirmationDialog title={project ? 'Remove project sessions?' : 'Remove this session?'}
-    description={project ? 'The reviewed sessions and their verified descendants will be removed.'
+  const completed = result?.status === 'deleted' && result.requested_absent !== false
+  const partial = result?.status === 'partial' || (result?.status === 'deleted' && !completed)
+  const confirmationTitle = project ? 'Remove project sessions?' : 'Remove this session?'
+  return <ConfirmationDialog title={completed ? 'Deletion completed' : confirmationTitle}
+    description={completed ? undefined : project ? 'The reviewed sessions and their descendants will be removed.'
       : review && 'files' in review.plan ? 'The reviewed session files and linked local artifacts will be removed.'
-      : 'The selected session and its verified descendants will be removed.'}
-    onClose={onClose} onConfirm={review && !finished ? () => void remove() : undefined} busy={busy} finished={finished}>
+      : 'The selected session and its descendants will be removed.'}
+    onClose={onClose} onConfirm={review && !finished ? () => void remove() : undefined} busy={busy} finished={finished && !completed}
+    completed={completed}>
     <div className="confirmation-summary">
       <strong>{title}</strong>
       {review && <ReviewedResources review={review} />}
       {!review && !reviewError && <LoadingState title="Preparing removal review" />}
     </div>
     {(reviewError || error) && <Notice tone="error">{reviewError || error}</Notice>}
-    {result && <Notice tone={result.status === 'deleted' ? 'success' : result.status === 'partial' ? 'warning' : 'error'}>
-      <strong>{result.status === 'deleted' ? 'Removed' : result.status === 'partial' ? 'Partially removed' : 'Removal failed'}</strong>
+    {result && !completed && <Notice tone={partial ? 'warning' : 'error'}>
+      <strong>{partial ? 'Partially removed' : 'Removal failed'}</strong>
       <p>{result.message}</p>
       {result.errors.length > 0 && <ul>{result.errors.map((message, index) => <li key={index}>{message}</li>)}</ul>}
     </Notice>}

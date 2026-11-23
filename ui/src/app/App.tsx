@@ -19,6 +19,7 @@ export function App() {
   const [auth, setAuth] = useState<'waiting' | 'ready' | 'failed'>('waiting')
   const [authError, setAuthError] = useState('')
   const [provider, setProvider] = useState<Provider>('codex')
+  const [providerSwitched, setProviderSwitched] = useState(false)
   const [view, setView] = useState<View>('sessions')
   const [viewSwitched, setViewSwitched] = useState(false)
   const [summary, setSummary] = useState<ProviderInfo>()
@@ -46,6 +47,7 @@ export function App() {
   function switchProvider(next: Provider) {
     if (next === provider) return
     setProvider(next)
+    setProviderSwitched(true)
     setView('sessions')
     setViewSwitched(false)
   }
@@ -69,10 +71,11 @@ export function App() {
     {auth === 'waiting' && <LoadingState title="Connecting to SessionMender" />}
     {auth === 'failed' && <EmptyState title="Local access"><Notice tone="error">{authError}</Notice></EmptyState>}
     {auth === 'ready' && <>
-      <ArchiveStats key={`stats-${provider}`} provider={provider} info={summary?.id === provider ? summary : undefined} />
+      <ArchiveStats provider={provider} info={summary?.id === provider ? summary : undefined} />
       {summaryError && view === 'exports' && <Notice tone="error">{summaryError}</Notice>}
       {view === 'exports' ? <Exports heading={heading} switched={viewSwitched} /> :
-        <SessionInventory key={`sessions-${provider}`} provider={provider} heading={heading} switched={viewSwitched} onInventoryChange={() => setRevision(value => value + 1)} />}
+        <SessionInventory key={`sessions-${provider}`} provider={provider} heading={heading} switched={viewSwitched}
+          providerSwitched={providerSwitched} onInventoryChange={() => setRevision(value => value + 1)} />}
     </>}
   </AppShell>
 }

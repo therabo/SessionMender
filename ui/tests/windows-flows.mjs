@@ -296,7 +296,7 @@ test('Windows native Codex, Claude and export review and confirmation', { timeou
     desktopWriter.exec('BEGIN IMMEDIATE')
     await page.getByRole('button', { name: /Fixture browser/ }).click()
     await page.getByRole('button', { name: 'Remove session' }).click()
-    await page.getByText(/1 selected session/).waitFor()
+    await page.getByText('1 session in the removal plan', { exact: true }).waitFor()
     await page.getByRole('button', { name: 'Confirm removal' }).click()
     await page.getByText('Partially removed', { exact: true }).waitFor()
     await page.getByRole('button', { name: 'Close', exact: true }).click()

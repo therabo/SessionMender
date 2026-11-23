@@ -6,6 +6,7 @@
 .stat-card:nth-child(2) { animation-delay: var(--motion-stats-stagger); }
 .stat-card:nth-child(3) { animation-delay: calc(2 * var(--motion-stats-stagger)); }
 .inventory-panel { animation: panel-enter var(--motion-panel) var(--ease-out) var(--motion-panel-delay) both; }
+.sessions-panel[data-provider-switched="true"] { animation: none; }
 .inventory-panel[data-switched="true"] { animation: appear var(--motion-view-switch) var(--ease-out) both; }
 .inventory-panel[data-switched="true"] .inventory-switch[data-side="last"]::before {
   animation: thumb-from-first var(--motion-view-switch) var(--ease-out);

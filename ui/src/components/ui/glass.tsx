@@ -54,7 +54,7 @@ export function SelectField({ label, value, onChange, children }: {
 export function StatCard({ label, value, description }: { label: string; value: string; description?: string }) {
   return <GlassPanel className="stat-card">
     <span className="stat-orb" aria-hidden />
-    <div title={description}><strong>{value}</strong><span>{label}</span></div>
+    <div title={description}><strong title={description ? `${value} · ${description}` : value}>{value}</strong><span>{label}</span></div>
   </GlassPanel>
 }
 
