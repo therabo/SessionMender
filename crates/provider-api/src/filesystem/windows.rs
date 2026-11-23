@@ -426,10 +426,10 @@ mod tests {
         let root = Directory::open(fixture.path())?;
         let folder = root
             .path()
-            .join("progetto con spazi 日本")
+            .join("project with spaces 日本")
             .join("a".repeat(190));
         fs::create_dir_all(&folder)?;
-        let target = folder.join("sessione-è.jsonl");
+        let target = folder.join("session-é.jsonl");
         fs::write(&target, b"old")?;
         let old = root.inspect(&target)?;
         let moved = folder.join("original");

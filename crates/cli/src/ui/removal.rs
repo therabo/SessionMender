@@ -14,7 +14,7 @@ use std::{
 
 pub(super) const REVIEW_AGE: Duration = Duration::from_secs(120);
 
-pub(super) const PROTECTED: &str = "La sessione è protetta dalla configurazione di avvio.";
+pub(super) const PROTECTED: &str = "The session is protected by the launch configuration.";
 
 pub(super) fn native_reason(app: &App) -> Option<&'static str> {
     app.codex_native_reason
@@ -113,9 +113,9 @@ fn confirm_codex(
         .take_if(|plan| {
             plan.key == key && plan.project == project && Some(&plan.id) == review.as_ref()
         })
-        .ok_or_else(|| ApiError::conflict("Apri una nuova anteprima Codex."))?;
+        .ok_or_else(|| ApiError::conflict("Open a new Codex removal review."))?;
     if review.expires <= Instant::now() {
-        return Err(ApiError::conflict("Anteprima Codex scaduta."));
+        return Err(ApiError::conflict("The Codex removal review has expired."));
     }
     if project {
         app.inventory.invalidate(ProviderKind::Codex);
@@ -126,7 +126,7 @@ fn confirm_codex(
         current.sort();
         if reviewed != current {
             return Err(ApiError::conflict(
-                "Le sessioni del progetto sono cambiate. Apri una nuova anteprima.",
+                "The project sessions have changed. Open a new removal review.",
             ));
         }
     }
@@ -141,10 +141,10 @@ fn confirm_codex(
         .delete_reviewed(review.plan)
         .map_err(ApiError::conflict)?;
     let mut message = format!(
-        "Comandi nativi riusciti · {native_succeeded}. UUID verificati assenti · {verified_absent}."
+        "Successful native commands · {native_succeeded}. UUIDs verified absent · {verified_absent}."
     );
     if !errors.is_empty() && (native_succeeded > 0 || verified_absent > 0) {
-        message.push_str(" Operazione incompleta.");
+        message.push_str(" The operation is incomplete.");
     }
     if !project && let Some(detail) = messages.first() {
         message.push(' ');
@@ -179,7 +179,7 @@ pub(super) async fn claude_preview(
             .removal_plan(&session.identity, &evidence)
             .map_err(|_| {
                 ApiError::conflict(
-                    "Transcript Claude cambiato o non leggibile. Aggiorna l’inventario.",
+                    "The Claude Code transcript has changed or is unreadable. Refresh the inventory.",
                 )
             })?;
         let id = super::token()?;
@@ -239,7 +239,7 @@ pub(super) async fn session(
     Json(request): Json<Confirmation>,
 ) -> Result<Json<ResultView>, ApiError> {
     if !request.confirm {
-        return Err(ApiError::bad("Conferma l’eliminazione definitiva."));
+        return Err(ApiError::bad("Confirm permanent deletion."));
     }
     let provider = provider(&name)?;
     read(app, move |app| {
@@ -254,10 +254,10 @@ pub(super) async fn session(
                         slot.take_if(|plan| {
                             plan.key == key && Some(&plan.id) == request.review.as_ref()
                         })
-                        .ok_or_else(|| ApiError::conflict("Apri una nuova anteprima Claude."))?
+                        .ok_or_else(|| ApiError::conflict("Open a new Claude Code removal review."))?
                     };
                     if review.expires <= Instant::now() {
-                        return Err(ApiError::conflict("Anteprima Claude scaduta."));
+                        return Err(ApiError::conflict("The Claude Code removal review has expired."));
                     }
                     app.inventory.invalidate(ProviderKind::Claude);
                     let (session, evidence) = app.inventory.selected_claude(app, &key)?;
@@ -266,19 +266,19 @@ pub(super) async fn session(
                         .removal_plan(&session.identity, &evidence)
                         .map_err(|_| {
                             ApiError::conflict(
-                                "Transcript Claude cambiato. Apri una nuova anteprima.",
+                                "The Claude Code transcript has changed. Open a new removal review.",
                             )
                         })?;
                     if current != review.plan {
                         return Err(ApiError::conflict(
-                            "Le risorse Claude sono cambiate. Apri una nuova anteprima.",
+                            "The Claude Code resources have changed. Open a new removal review.",
                         ));
                     }
                     let outcome = current.delete();
                     result(
                         outcome.removed_files,
                         format!(
-                            "{} file eliminati · {} byte logici · {} righe di history eliminate.",
+                            "{} files deleted · {} logical bytes · {} history entries deleted.",
                             outcome.removed_files, outcome.removed_bytes, outcome.history_rows,
                         ),
                         outcome.errors,
@@ -302,7 +302,7 @@ pub(super) async fn project(
     Json(request): Json<Confirmation>,
 ) -> Result<Json<ResultView>, ApiError> {
     if !request.confirm {
-        return Err(ApiError::bad("Conferma l’eliminazione definitiva."));
+        return Err(ApiError::bad("Confirm permanent deletion."));
     }
     read(app, move |app| {
         let _mutation = app.mutations.lock().map_err(|_| ApiError::internal())?;

@@ -79,14 +79,14 @@ impl Observation {
                     (
                         Coverage::Unavailable,
                         Some(
-                            "Il provider è installato, ma l'archivio configurato non è stato trovato.".to_owned(),
+                            "The provider is installed, but the configured archive could not be found.".to_owned(),
                         ),
                         InventoryObservation::default(),
                     )
                 } else {
                     (
                         Coverage::NotDetected,
-                        Some("Installazione e archivio locale non rilevati.".to_owned()),
+                        Some("No installation or local archive detected.".to_owned()),
                         InventoryObservation::default(),
                     )
                 }
@@ -95,23 +95,20 @@ impl Observation {
                 Ok(observation) => (Coverage::Available, None, observation),
                 Err(ProviderError::PermissionDenied(_)) => (
                     Coverage::Unavailable,
-                    Some("Accesso negato all’archivio del provider.".to_owned()),
+                    Some("Access to the provider archive was denied.".to_owned()),
                     InventoryObservation::default(),
                 ),
                 Err(ProviderError::InvalidScope(reason)) if reason == "stale_codex_source" => (
                     Coverage::Unavailable,
                     Some(
-                        "L’archivio è cambiato durante la lettura. Aggiorna l’inventario."
+                        "The archive changed while it was being read. Refresh the inventory."
                             .to_owned(),
                     ),
                     InventoryObservation::default(),
                 ),
                 Err(_) if !agentmender_provider_codex::CONTENT_SUPPORTED => (
                     Coverage::Unavailable,
-                    Some(
-                        "Lettura dell’archivio Codex non disponibile su questa piattaforma."
-                            .to_owned(),
-                    ),
+                    Some("Reading the Codex archive is unavailable on this platform.".to_owned()),
                     InventoryObservation::default(),
                 ),
                 Err(ProviderError::CapabilityUnavailable(reason)) => (
@@ -121,17 +118,13 @@ impl Observation {
                 ),
                 Err(_) => (
                     Coverage::Unavailable,
-                    Some(
-                        "L’archivio non è leggibile o usa un formato non riconosciuto.".to_owned(),
-                    ),
+                    Some("The archive is unreadable or uses an unrecognized format.".to_owned()),
                     InventoryObservation::default(),
                 ),
             },
             _ => (
                 Coverage::Unavailable,
-                Some(
-                    "La directory dell’archivio non è accessibile o è un collegamento.".to_owned(),
-                ),
+                Some("The archive directory is inaccessible or is a link.".to_owned()),
                 InventoryObservation::default(),
             ),
         };
@@ -156,12 +149,12 @@ impl Observation {
         {
             (
                 Coverage::Unavailable,
-                Some("Nessun archivio di progetto accessibile.".to_owned()),
+                Some("No accessible project archive found.".to_owned()),
             )
         } else {
             (
                 Coverage::NotDetected,
-                Some("Installazione e archivio locale non rilevati.".to_owned()),
+                Some("No installation or local archive detected.".to_owned()),
             )
         };
         Self {
@@ -192,7 +185,7 @@ impl Snapshot {
         observation.sessions.reverse();
         let removal_reason = match provider {
             ProviderKind::Claude => Some(REMOVAL_NOTICE),
-            ProviderKind::Codex if !can_read => Some("L'archivio Codex è indisponibile."),
+            ProviderKind::Codex if !can_read => Some("The Codex archive is unavailable."),
             ProviderKind::Codex => removal::native_reason(app),
         };
         let grouped = projects::build(&observation, &app.home);
@@ -237,7 +230,7 @@ impl Snapshot {
         self.ids
             .get(key)
             .and_then(|&position| self.index.get(position))
-            .ok_or_else(|| ApiError::missing("Sessione non presente nell’inventario corrente."))
+            .ok_or_else(|| ApiError::missing("Session not found in the current inventory."))
     }
 }
 
@@ -369,7 +362,7 @@ impl Inventories {
                 .projects
                 .get(key)
                 .map(|project| read(app, snapshot, project))
-                .ok_or_else(|| ApiError::missing("Progetto non presente nell’inventario corrente."))
+                .ok_or_else(|| ApiError::missing("Project not found in the current inventory."))
         })
     }
 
@@ -417,8 +410,7 @@ impl Inventories {
     }
 }
 
-pub(super) const NO_CLAUDE_PROJECT_REMOVAL: &str =
-    "Seleziona una conversazione Claude Code individuale.";
+pub(super) const NO_CLAUDE_PROJECT_REMOVAL: &str = "Select an individual Claude Code conversation.";
 
 #[derive(Serialize)]
 pub(super) struct ProjectsPage {
@@ -445,12 +437,12 @@ impl ProjectView {
             Some(NO_CLAUDE_PROJECT_REMOVAL)
         } else if project.desktop_backed {
             Some(
-                "La rimozione in blocco richiede appartenenze native verificabili. Le assegnazioni Desktop consentono la consultazione.",
+                "Bulk removal requires verifiable native project membership. Desktop assignments support browsing.",
             )
         } else if project.membership_incomplete {
-            Some("L’appartenenza delle sessioni non è verificabile con la copertura corrente.")
+            Some("Session membership cannot be verified with the current coverage.")
         } else if project.sessions.is_empty() {
-            Some("Il progetto registrato non ha conversazioni principali osservate.")
+            Some("No main conversations were observed in the registered project.")
         } else {
             removal::native_reason(app).or_else(|| {
                 project
@@ -568,7 +560,7 @@ impl TryFrom<Filter> for InventoryQuery {
             || offset > 100_000
             || !(1..=100).contains(&limit)
         {
-            return Err(ApiError::bad("Filtri o paginazione non validi."));
+            return Err(ApiError::bad("Invalid filters or pagination."));
         }
         Ok(Self {
             search,

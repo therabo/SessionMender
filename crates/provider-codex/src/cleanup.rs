@@ -51,7 +51,7 @@ pub(super) fn after_native_delete(root: &Path, id: Uuid) -> Vec<String> {
 
             desktop_reconciliation::remove_local_thread(root, &id, &mut errors);
         }
-        Err(error) => errors.push(format!("Archivio Codex: {error}")),
+        Err(error) => errors.push(format!("Codex archive: {error}")),
     }
     errors
 }
@@ -60,7 +60,7 @@ fn prune_desktop_state(state: &mut Value, id: &str) -> io::Result<bool> {
     let state = state.as_object_mut().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "Lo stato Desktop deve essere un oggetto JSON.",
+            "The Desktop state must be a JSON object.",
         )
     })?;
     let mut changed = false;

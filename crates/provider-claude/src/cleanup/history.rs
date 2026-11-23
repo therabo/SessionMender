@@ -90,7 +90,7 @@ mod windows {
             .map(Some)
             .map_err(|error| {
                 if error.kind() == io::ErrorKind::AlreadyExists {
-                    io::Error::other("Cronologia occupata. Le righe sono state conservate.")
+                    io::Error::other("The history file is busy. Its entries were preserved.")
                 } else {
                     error
                 }

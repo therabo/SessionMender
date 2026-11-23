@@ -23,7 +23,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'sessionmender-win-'))
   const codex = join(root, 'codex 日本')
   const claude = join(root, 'claude')
-  const workspace = join(root, 'workspace protetto')
+  const workspace = join(root, 'protected workspace')
   const exports = join(codex, 'exports')
   const namespace = join(claude, 'projects', 'fixture')
   const dirs = [codex, namespace, workspace, exports]
@@ -290,7 +290,7 @@ test('Windows native Codex, Claude and export review and confirmation', { timeou
     assert.notEqual(reconcile(liveId).status, 0)
     const stillPresent = reconcile('--confirm', liveId)
     assert.equal(stillPresent.status, 1, stillPresent.stderr)
-    assert.match(stillPresent.stderr, /presente/)
+    assert.match(stillPresent.stderr, /still present/)
     assert.equal(localEntry.get(liveId).present, 1)
 
     desktopWriter.exec('BEGIN IMMEDIATE')

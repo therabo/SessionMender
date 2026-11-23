@@ -679,7 +679,7 @@ fn observe(
         native_id: shape.session_id.clone(),
         ..identity.clone()
     });
-    let fallback = format!("Sessione {}", &shape.session_id[..8]);
+    let fallback = format!("Session {}", &shape.session_id[..8]);
     let (title, title_source) = if let Some(value) = scan.custom {
         (value, TitleSource::Custom)
     } else if let Some(value) = scan.generated {

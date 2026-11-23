@@ -5,7 +5,7 @@ if errorlevel 1 exit /b 1
 
 set "backend=%CD%\target\debug\agentmender.exe"
 if not exist "%backend%" (
-    echo SessionMender non e ancora compilato. Esegui cargo build dalla cartella del progetto.
+    echo SessionMender has not been built. Run cargo build from the project directory.
     goto failed
 )
 
@@ -13,7 +13,7 @@ set "chrome_executable=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 if not exist "%chrome_executable%" set "chrome_executable=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
 if not exist "%chrome_executable%" set "chrome_executable=%LocalAppData%\Google\Chrome\Application\chrome.exe"
 if not exist "%chrome_executable%" (
-    echo Google Chrome non e stato trovato.
+    echo Google Chrome was not found.
     goto failed
 )
 

@@ -49,8 +49,7 @@ struct UuidScope {
     namespace_directories: usize,
 }
 
-const AMBIGUOUS_UUID: &str =
-    "Risorse per UUID preservate perché lo stesso ID potrebbe appartenere a più sessioni.";
+const AMBIGUOUS_UUID: &str = "Resources associated with the UUID were preserved because the same ID may belong to multiple sessions.";
 
 fn uuid_is_unique<'a>(mut roots: impl Iterator<Item = &'a Path>, transcript: &Path) -> bool {
     roots.all(|root| unique_transcript(root, transcript).unwrap_or(false))
@@ -200,7 +199,7 @@ impl ClaudeAdapter {
                     plan.candidate(&desktop.root, &desktop.path);
                 } else {
                     plan.notes
-                        .push("Registrazione Desktop cambiata o non leggibile.");
+                        .push("The Desktop record has changed or is unreadable.");
                 }
             }
             for directory in ["session-env", "tasks", "file-history"] {
@@ -217,7 +216,7 @@ impl ClaudeAdapter {
 
 impl Plan {
     fn note_scan_error(&mut self, error: io::Error) {
-        const NOTE: &str = "Alcune risorse associate sono protette o non leggibili.";
+        const NOTE: &str = "Some associated resources are protected or unreadable.";
         if error.kind() != io::ErrorKind::NotFound && !self.notes.contains(&NOTE) {
             self.notes.push(NOTE);
         }

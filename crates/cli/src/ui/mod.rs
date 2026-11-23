@@ -79,7 +79,7 @@ impl ApiError {
     fn internal() -> Self {
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "Operazione locale non disponibile.".into(),
+            "The local operation is unavailable.".into(),
         )
     }
 }
@@ -110,11 +110,11 @@ async fn boundary(State(app): State<Arc<App>>, request: Request, next: Next) -> 
         || (!matches!(*request.method(), Method::GET | Method::HEAD) && !origin())
         || (headers.contains_key(header::ORIGIN) && !origin())
     {
-        ApiError(StatusCode::FORBIDDEN, "Origine locale non valida.".into()).into_response()
+        ApiError(StatusCode::FORBIDDEN, "Invalid local origin.".into()).into_response()
     } else if path.starts_with("/api/") && path != "/api/authorize" && !authorized() {
         ApiError(
             StatusCode::UNAUTHORIZED,
-            "Apri il link di avvio di AgentMender.".into(),
+            "Open the SessionMender launch link.".into(),
         )
         .into_response()
     } else {
@@ -159,7 +159,7 @@ async fn authorize(
     if ticket.as_ref() != Some(&request.ticket) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Link di avvio non valido o già utilizzato.".into(),
+            "The launch link is invalid or has already been used.".into(),
         ));
     }
     *ticket = None;
@@ -175,7 +175,7 @@ async fn read<T: Send + 'static>(
     let slot = app.reads.clone().try_acquire_owned().map_err(|_| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
-            "AgentMender è occupato. Riprova tra poco.".into(),
+            "SessionMender is busy. Try again shortly.".into(),
         )
     })?;
     tokio::task::spawn_blocking(move || {
@@ -190,7 +190,7 @@ fn provider(value: &str) -> Result<ProviderKind, ApiError> {
     match value {
         "codex" => Ok(ProviderKind::Codex),
         "claude" => Ok(ProviderKind::Claude),
-        _ => Err(ApiError::missing("Provider non riconosciuto.")),
+        _ => Err(ApiError::missing("Unrecognized provider.")),
     }
 }
 
@@ -399,7 +399,7 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
     let error = str::to_owned;
     if INDEX.is_empty() || SCRIPT.is_empty() || STYLES.is_empty() {
         return Err(error(
-            "UI assets are missing. Run npm ci and npm run build in ui/, then rebuild AgentMender.",
+            "UI assets are missing. Run npm ci and npm run build in ui/, then rebuild SessionMender.",
         ));
     }
     let launch = token().map_err(|_| error("Unable to create a local authorization ticket."))?;

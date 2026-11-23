@@ -1,11 +1,11 @@
-# AgentMender
+# SessionMender
 
-AgentMender is a local browser app for browsing and cleaning up Codex and Claude Code sessions. It brings conversations, projects, and storage into one place so you can find old work and review what a cleanup would remove.
+SessionMender is a local browser app for browsing and cleaning up Codex and Claude Code sessions. It brings conversations, projects, and storage into one place so you can find old work and review what a cleanup would remove.
 
 ## Features
 
 - Discover local installations and archives. Search and filter main conversations by project, activity, state, and size, then open their transcripts.
-- Review a Codex session and its verified descendants before deleting the tree. Where project membership is complete, delete a registered project's sessions in bulk while keeping the project and workspace. After native deletion, AgentMender cleans up scoped history, indexes, and recognized Codex Desktop catalog entries.
+- Review a Codex session and its verified descendants before deleting the tree. Where project membership is complete, delete a registered project's sessions in bulk while keeping the project and workspace. After native deletion, SessionMender cleans up scoped history, indexes, and recognized Codex Desktop catalog entries.
 - Review and delete a Claude Code session, including verified session files, checkpoints, and matching shared history entries.
 - Use Storage Manager to inspect Claude Code disk usage and review individual Codex export and backup groups before removing them.
 
@@ -68,6 +68,6 @@ Run `npm run test:background --prefix ui` for the scene configuration and model-
 
 ## Permanent deletion
 
-AgentMender requires an explicit confirmation before deleting sessions or exports. **Deletion is permanent. No backups are created.** Review the affected items before confirming. A cleanup can partially succeed if files change or become inaccessible. The result reports failures and the inventory refreshes after the attempt.
+SessionMender requires an explicit confirmation before deleting sessions or exports. **Deletion is permanent. No backups are created.** Review the affected items before confirming. A cleanup can partially succeed if files change or become inaccessible. The result reports failures and the inventory refreshes after the attempt.
 
 On macOS and Linux, export removal unlinks symbolic links and hard-link entries by name. Files and hard-link entries outside the selected groups are preserved.

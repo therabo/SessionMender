@@ -23,9 +23,9 @@ const MAX_GROUPS: usize = 4_096;
 const MAX_MANIFEST_BYTES: usize = 8_192;
 const MARKER: &str = ".artifact-session-publication.json";
 const LEASE: &str = ".artifact-session-publication-lease.json";
-const CHANGED: &str = "Il gruppo o la sua root è cambiato dopo l’anteprima.";
+const CHANGED: &str = "The group or its root changed after the review.";
 #[cfg(any(unix, windows))]
-const OVERLAP: &str = "Il gruppo si sovrappone a un’altra area di storage rilevata.";
+const OVERLAP: &str = "The group overlaps another detected storage area.";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -213,14 +213,14 @@ fn publication(group: &Path, value: &Manifest) -> bool {
 
 fn status(protection: Protection) -> &'static str {
     match protection {
-        Protection::ProviderManaged => "Pubblicazione Artifact Session.",
-        Protection::IndependentBackup => "Backup indipendente.",
-        Protection::UserOutput => "Output dell’utente.",
-        Protection::UnknownOwner => "Gruppo di una root export con proprietà sconosciuta.",
-        Protection::Shared => "Il gruppo contiene collegamenti o riferimenti condivisi.",
-        Protection::InUse => "Il gruppo contiene un lease di pubblicazione attivo.",
+        Protection::ProviderManaged => "Artifact Session publication.",
+        Protection::IndependentBackup => "Independent backup.",
+        Protection::UserOutput => "User output.",
+        Protection::UnknownOwner => "The group belongs to an export root with unknown ownership.",
+        Protection::Shared => "The group contains links or shared references.",
+        Protection::InUse => "The group has an active publication lease.",
         Protection::Incomplete => {
-            "Inventario parziale per accesso, budget o modifica del contenuto."
+            "The inventory is incomplete due to access restrictions, scan limits, or content changes."
         }
     }
 }
@@ -437,7 +437,7 @@ fn group(
         .as_ref()
         .is_some_and(|meta| meta.is_dir() && !filesystem::is_link(meta));
     let mut format = if dir {
-        "Gruppo filesystem".into()
+        "Filesystem group".into()
     } else {
         path.extension()
             .and_then(|e| safe_label(e.to_string_lossy().into_owned()))
@@ -461,7 +461,7 @@ fn group(
             && let Some(marker) =
                 manifest(&storage.path, &path.join(MARKER)).filter(|value| publication(path, value))
         {
-            format = "Pubblicazione Artifact Session".into();
+            format = "Artifact Session publication".into();
             producer = Some("Codex Desktop Artifact Session".into());
             seen_manifest = Some(MARKER);
             protection = Protection::ProviderManaged;
@@ -618,11 +618,11 @@ impl Inventory {
                             if !fs::symlink_metadata(&path)
                                 .is_ok_and(|entry| entry.dev() == meta.dev()) =>
                         {
-                            Some("Il gruppo è inaccessibile o su un altro volume.")
+                            Some("The group is inaccessible or on a different volume.")
                         }
                         #[cfg(windows)]
                         Ok(_) if pinned_root.inspect(&path).is_err() => {
-                            Some("Il gruppo è inaccessibile, condiviso o su un altro volume.")
+                            Some("The group is inaccessible, shared, or on a different volume.")
                         }
                         Ok(_) => None,
                     };
@@ -641,7 +641,7 @@ impl Inventory {
                 }
                 #[cfg(not(any(unix, windows)))]
                 {
-                    row.reason = "Eliminazione export non disponibile su questa piattaforma.";
+                    row.reason = "Export removal is unavailable on this platform.";
                 }
                 size.files = size.files.saturating_add(row.size.files);
                 size.directories = size.directories.saturating_add(row.size.directories);
@@ -683,7 +683,7 @@ impl Inventory {
 #[cfg(any(unix, windows))]
 fn removal_scope(storage: &[Storage], root: &Storage) -> Result<HashSet<String>, &'static str> {
     if root.kind == StorageKind::ArtifactSessionExports && !root.recognized {
-        return Err("La root Artifact Session non è verificata.");
+        return Err("The Artifact Session root could not be verified.");
     }
     // Automatically discovered roots yield to provider and explicit roots.
     let others = storage.iter().filter(|other| {
@@ -895,11 +895,11 @@ fn remove_observed(
 #[cfg(any(unix, windows))]
 fn removal_error(error: io::Error) -> &'static str {
     match error.kind() {
-        io::ErrorKind::PermissionDenied => "Permesso negato durante l’eliminazione.",
+        io::ErrorKind::PermissionDenied => "Permission was denied during deletion.",
         io::ErrorKind::NotFound | io::ErrorKind::InvalidData | io::ErrorKind::DirectoryNotEmpty => {
             CHANGED
         }
-        _ => "Il filesystem ha impedito l’eliminazione.",
+        _ => "The filesystem prevented deletion.",
     }
 }
 

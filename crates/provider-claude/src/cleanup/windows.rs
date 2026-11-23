@@ -27,7 +27,9 @@ impl Object {
     pub fn remove(&self, root: &Path, relative: &Path) -> io::Result<u64> {
         let directory = Directory::open(root)?;
         if directory.item().identity != self.root.identity {
-            return Err(io::Error::other("Radice Claude cambiata dopo l’anteprima."));
+            return Err(io::Error::other(
+                "The Claude Code root changed after the review.",
+            ));
         }
         directory.remove(&directory.path().join(relative), self.item)
     }

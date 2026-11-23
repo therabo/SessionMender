@@ -1,5 +1,5 @@
-export function errorText(failure: unknown, fallback = 'Il servizio locale non risponde.'): string {
-  return failure instanceof Error ? failure.message : fallback
+export function errorText(failure: unknown): string {
+  return failure instanceof Error ? failure.message : 'The local service is not responding.'
 }
 
 const authorizationKey = 'agentmender.authorization'
@@ -12,7 +12,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const response = await fetch(path, { ...options, headers, cache: 'no-store', credentials: 'omit' })
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
-    throw new Error(payload.error ?? 'La richiesta non è valida o il servizio locale non risponde.')
+    throw new Error(payload.error ?? 'The request is invalid or the local service is not responding.')
   }
   if (response.status === 204) return undefined as T
   return response.json()
@@ -22,7 +22,7 @@ export async function authorize(): Promise<void> {
   const ticket = new URLSearchParams(window.location.hash.slice(1)).get('ticket')
   if (!ticket) {
     if (!sessionStorage.getItem(authorizationKey)) {
-      throw new Error('Apri il link di avvio stampato da agentmender ui.')
+      throw new Error('Open the launch link printed by agentmender ui.')
     }
     return
   }

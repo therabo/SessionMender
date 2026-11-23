@@ -98,7 +98,7 @@ pub fn replace(
             fs::fchmod(&output, Mode::from_bits_truncate(initial.st_mode & 0o777))?;
             let current = fs::statat(root, name, AtFlags::SYMLINK_NOFOLLOW)?;
             if revision(&initial) != revision(&current) || current.st_nlink != 1 {
-                return Err(io::Error::other("File cambiato durante la riscrittura."));
+                return Err(io::Error::other("The file changed during the rewrite."));
             }
             before_commit()?;
             fs::renameat(root, temp.as_str(), root, name)?;

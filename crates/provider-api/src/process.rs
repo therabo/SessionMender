@@ -60,8 +60,8 @@ pub fn codex_delete(
         .stdin(Stdio::null());
     #[cfg(windows)]
     windows_environment(&mut command, root);
-    let output =
-        native_output(command).map_err(|error| format!("Avvio del comando Codex: {error}"))?;
+    let output = native_output(command)
+        .map_err(|error| format!("Could not run the Codex command: {error}"))?;
     let message = |bytes: &[u8]| {
         String::from_utf8_lossy(bytes)
             .lines()
@@ -78,7 +78,7 @@ pub fn codex_delete(
     if output.status.success() {
         let detail = message(&output.stdout);
         return Ok(if detail.is_empty() {
-            "Sessione eliminata da Codex.".into()
+            "Session deleted by Codex.".into()
         } else {
             detail
         });
@@ -90,7 +90,7 @@ pub fn codex_delete(
         detail
     };
     Err(if detail.is_empty() {
-        format!("Comando Codex fallito ({})", output.status)
+        format!("Codex command failed ({})", output.status)
     } else {
         detail
     })
@@ -112,7 +112,7 @@ fn native_output(mut command: Command) -> std::io::Result<std::process::Output> 
                 .read_to_end(&mut bytes)
                 .and_then(|_| {
                     if bytes.len() as u64 > LIMIT {
-                        return Err(std::io::Error::other("output Codex oltre il limite"));
+                        return Err(std::io::Error::other("Codex output exceeded the limit"));
                     }
                     Ok(bytes)
                 });

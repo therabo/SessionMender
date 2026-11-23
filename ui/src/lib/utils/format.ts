@@ -1,6 +1,5 @@
-import type { Kind, Provider, State } from '../api/contracts'
+import type { Kind, State } from '../api/contracts'
 
-export const providerLabel: Record<Provider, string> = { codex: 'Codex', claude: 'Claude Code' }
 export const stateLabel: Record<State, string> = {
   active: 'Active',
   archived: 'Archived',
@@ -34,7 +33,7 @@ export function sizeLabel(bytes: number | null): string {
 export const numberLabel = (count: number) => integer.format(count)
 
 export function pathLabel(path: string | { encoding: string; hex: string } | undefined) {
-  return typeof path === 'string' ? path : 'Percorso non rappresentabile'
+  return typeof path === 'string' ? path : 'Path cannot be displayed'
 }
 
 const relativeDate = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })

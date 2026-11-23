@@ -17,10 +17,9 @@ use std::{
 };
 
 #[cfg(any(target_os = "macos", windows))]
-pub const REMOVAL_NOTICE: &str =
-    "L’anteprima della sessione mostra i file interessati dall’eliminazione.";
+pub const REMOVAL_NOTICE: &str = "The session removal review lists the affected files.";
 #[cfg(not(any(target_os = "macos", windows)))]
-pub const REMOVAL_NOTICE: &str = "Eliminazione Claude non disponibile su questa piattaforma.";
+pub const REMOVAL_NOTICE: &str = "Claude Code removal is unavailable on this platform.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

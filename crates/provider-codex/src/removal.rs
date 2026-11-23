@@ -107,10 +107,10 @@ impl Archive {
         let root = self
             .nodes
             .get(&id)
-            .ok_or("Sessione Codex non più presente.")?;
+            .ok_or("The Codex session is no longer present.")?;
         if !root.present || root.uncertain || !root.parents.is_empty() {
             return Err(format!(
-                "{id}: identità o relazione della sessione Codex non verificabile."
+                "{id}: Codex session identity or relationship could not be verified."
             ));
         }
 
@@ -122,13 +122,15 @@ impl Archive {
             offset += 1;
             if protected.contains(&parent) {
                 return Err(format!(
-                    "{parent}: sessione protetta dalla configurazione di avvio."
+                    "{parent}: session protected by the launch configuration."
                 ));
             }
             for &child in self.children.get(&parent).into_iter().flatten() {
                 let node = &self.nodes[&child];
                 if !seen.insert(child) || node.parents.len() != 1 || node.uncertain {
-                    return Err(format!("{child}: discendenza Codex ambigua o ciclica."));
+                    return Err(format!(
+                        "{child}: Codex descendant relationships are ambiguous or cyclic."
+                    ));
                 }
                 descendants.push(Descendant {
                     id: child,
@@ -185,7 +187,7 @@ impl Archive {
             }) {
                 blocked.insert(id);
                 changes.insert(format!(
-                    "{id}: relazione o presenza cambiata dopo l’anteprima."
+                    "{id}: the relationship or presence changed after the review."
                 ));
             }
 
@@ -195,7 +197,7 @@ impl Archive {
                 }) {
                     blocked.insert(id);
                     changes.insert(format!(
-                        "{id}: discendente {child} fuori dal piano confermato."
+                        "{id}: descendant {child} is outside the confirmed plan."
                     ));
                 }
             }
@@ -218,7 +220,7 @@ impl CodexAdapter {
     fn archive(&self) -> Result<Archive, String> {
         self.lineage()
             .map(Archive::from_facts)
-            .map_err(|error| format!("Grafo o archivio Codex non verificabile: {error}"))
+            .map_err(|error| format!("The Codex graph or archive could not be verified: {error}"))
     }
 
     fn selected_root(&self) -> Result<PathBuf, String> {
@@ -229,7 +231,7 @@ impl CodexAdapter {
         self.location
             .state_root
             .canonicalize()
-            .map_err(|error| format!("Archivio Codex non disponibile: {error}"))
+            .map_err(|error| format!("The Codex archive is unavailable: {error}"))
     }
 
     pub fn deletion_plan(
@@ -249,13 +251,13 @@ impl CodexAdapter {
                     || identity.namespace.is_some()
                     || !canonical_uuid(&identity.native_id)
                 {
-                    return Err("Sessione estranea all’archivio Codex.".to_owned());
+                    return Err("The session does not belong to the Codex archive.".to_owned());
                 }
-                Uuid::parse_str(&identity.native_id).map_err(|_| "UUID Codex non valido.".into())
+                Uuid::parse_str(&identity.native_id).map_err(|_| "Invalid Codex UUID.".into())
             })
             .collect::<Result<Vec<_>, String>>()?;
         if ids.is_empty() {
-            return Err("Nessuna sessione Codex da eliminare.".into());
+            return Err("No Codex sessions to delete.".into());
         }
         let archive = self.archive()?;
         let protected_ids = protected
@@ -277,7 +279,7 @@ impl CodexAdapter {
 
     pub fn native_removal_reason(&self) -> Option<&'static str> {
         #[cfg(not(any(target_os = "macos", windows)))]
-        return Some("Rimozione Codex non disponibile su questa piattaforma.");
+        return Some("Codex removal is unavailable on this platform.");
         #[cfg(any(target_os = "macos", windows))]
         {
             let Some(executable) = self
@@ -286,11 +288,13 @@ impl CodexAdapter {
                 .as_ref()
                 .filter(|path| path.is_file())
             else {
-                return Some("Eseguibile Codex non disponibile.");
+                return Some("The Codex executable is unavailable.");
             };
             #[cfg(windows)]
             if process::codex_delete_version(executable).is_err() {
-                return Some("Versione o comando delete --force del CLI Codex non verificabile.");
+                return Some(
+                    "The Codex CLI version or delete --force command could not be verified.",
+                );
             }
             #[cfg(target_os = "macos")]
             let _ = executable;
@@ -302,7 +306,7 @@ impl CodexAdapter {
         let _deletion = self
             .deletion
             .lock()
-            .map_err(|_| "Eliminazione Codex non disponibile.")?;
+            .map_err(|_| "Codex removal is unavailable.")?;
         if let Some(reason) = self.native_removal_reason() {
             return Err(reason.into());
         }
@@ -321,24 +325,24 @@ impl CodexAdapter {
             .collect();
         if self.deletion_plan(&identities, &plan.protected)? != plan {
             return Err(
-                "L’archivio o le relazioni sono cambiati. Apri una nuova anteprima Codex.".into(),
+                "The archive or session relationships have changed. Open a new Codex removal review.".into(),
             );
         }
         let executable = self
             .location
             .executable
             .as_deref()
-            .ok_or("Eseguibile Codex non disponibile.")?;
+            .ok_or("The Codex executable is unavailable.")?;
         let path = plan
             .root
             .to_str()
-            .ok_or("Percorso dell’archivio Codex non rappresentabile.")?;
+            .ok_or("The Codex archive path cannot be represented.")?;
         let setting = format!("sqlite_home={}", toml::Value::String(path.to_owned()));
         let native = |id| process::codex_delete(executable, &plan.root, &setting, id);
         Ok(delete(&plan, native, || {
             if self.selected_root()? != plan.root {
                 return Err(
-                    "L’archivio Codex è cambiato. Impossibile verificare l’eliminazione.".into(),
+                    "The Codex archive has changed. Deletion could not be verified.".into(),
                 );
             }
             self.archive()
@@ -355,23 +359,23 @@ impl CodexAdapter {
         let _deletion = self
             .deletion
             .lock()
-            .map_err(|_| "Riconciliazione Codex non disponibile.")?;
+            .map_err(|_| "Codex reconciliation is unavailable.")?;
         let root = self.selected_root()?;
         let _directory = agentmender_provider_api::filesystem::Directory::open(&root)
             .map_err(|error| error.to_string())?;
         let ids: BTreeSet<_> = ids.iter().collect();
         if ids.is_empty() {
-            return Err("Specificare almeno un UUID Codex da riconciliare.".into());
+            return Err("Specify at least one Codex UUID to reconcile.".into());
         }
         let archive = self.archive()?;
         for &id in &ids {
             if !canonical_uuid(id) {
-                return Err("UUID Codex non valido.".into());
+                return Err("Invalid Codex UUID.".into());
             }
             let uuid = Uuid::parse_str(id).map_err(|error| error.to_string())?;
             if protected.contains(id) || archive.present(uuid) {
                 return Err(format!(
-                    "{id}: sessione protetta, presente o non verificabile."
+                    "{id}: the session is protected, still present, or could not be verified."
                 ));
             }
         }
@@ -413,7 +417,7 @@ fn delete(
         };
         if current.tree(tree.id, &BTreeSet::new()).ok().as_ref() != Some(tree) {
             outcome.errors.push(format!(
-                "{}: sessione o discendenza cambiata dopo l’anteprima.",
+                "{}: the session or its descendants changed after the review.",
                 tree.id
             ));
             break;
@@ -484,9 +488,9 @@ fn delete(
         for id in targets {
             if current.present(id) {
                 let reason = if current.nodes.get(&id).is_some_and(|node| node.uncertain) {
-                    "presenza della sessione non verificabile"
+                    "session presence could not be verified"
                 } else {
-                    "sessione ancora presente nell’archivio Codex"
+                    "session is still present in the Codex archive"
                 };
                 outcome.errors.push(format!("{id}: {reason}."));
                 continue;
@@ -519,7 +523,7 @@ fn cleanup(root: &Path, id: Uuid, outcome: &mut Deletion) {
     outcome.errors.extend(
         crate::cleanup::after_native_delete(root, id)
             .into_iter()
-            .map(|error| format!("{id}: pulizia aggiuntiva incompleta. {error}")),
+            .map(|error| format!("{id}: additional cleanup was incomplete. {error}")),
     );
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = (root, id, outcome);

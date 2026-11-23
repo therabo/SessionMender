@@ -230,7 +230,6 @@ select option { background: var(--confirmation-surface); color: var(--text); }
 .notice > svg { margin-top: 2px; }
 .notice.warning { color: var(--warning); }
 .notice.error { color: var(--danger-text); }
-.notice.success { color: var(--active); }
 .notice ul { margin-block: 6px 0; padding-left: 18px; }
 
 .pagination {

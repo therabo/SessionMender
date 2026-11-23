@@ -3,7 +3,7 @@ import { AlertCircle, ChevronLeft, ChevronRight, Database, LoaderCircle } from '
 import { numberLabel } from '../../lib/utils/format'
 import { GlassButton } from './glass'
 
-export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?: 'info' | 'warning' | 'error' | 'success' }) {
+export function Notice({ children, tone }: { children: ReactNode; tone: 'warning' | 'error' }) {
   return <div className={`notice ${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
     <AlertCircle size={17} aria-hidden /><div>{children}</div>
   </div>

@@ -190,7 +190,7 @@ pub(crate) fn verified_read_root(
     use agentmender_provider_api::ProviderError;
     let directory = filesystem::Directory::open(root).map_err(|error| {
         ProviderError::CapabilityUnavailable(format!(
-            "radice locale Codex non verificabile: {error}"
+            "local Codex root could not be verified: {error}"
         ))
     })?;
     let path = directory.path();
@@ -199,13 +199,11 @@ pub(crate) fn verified_read_root(
         Ok(_) => {
             let bytes = filesystem::read_bounded(path, &config, 256 * 1024)?;
             let text = std::str::from_utf8(&bytes).map_err(|_| {
-                ProviderError::CapabilityUnavailable("config.toml Codex non leggibile".into())
+                ProviderError::CapabilityUnavailable("Codex config.toml is unreadable".into())
             })?;
             toml::from_str::<Settings>(text)
                 .map_err(|_| {
-                    ProviderError::CapabilityUnavailable(
-                        "config.toml Codex non riconosciuto".into(),
-                    )
+                    ProviderError::CapabilityUnavailable("Codex config.toml is unrecognized".into())
                 })?
                 .sqlite_home
         }
@@ -218,7 +216,8 @@ pub(crate) fn verified_read_root(
             .is_ok_and(|sqlite| sqlite.item().identity == directory.item().identity)
     {
         return Err(ProviderError::CapabilityUnavailable(
-            "associazione del database sqlite_home separato non verificabile".into(),
+            "the separate sqlite_home database could not be verified as part of this archive"
+                .into(),
         ));
     }
     Ok(path.to_owned())
@@ -292,34 +291,34 @@ impl Discovery {
         let mut recognized_alternatives = platform_archives
             .iter()
             .filter(|path| archive_format(path) && provider_marker(path));
-        let (selected, source) = if let Some(root) = root_override {
-            (root, "argomento di avvio")
+        let selected = if let Some(root) = root_override {
+            root
         } else if let Some(root) = configured.as_ref() {
-            (root.clone(), "CODEX_HOME")
+            root.clone()
         } else if access(&default) == Access::Unavailable
             && let Some(alternative) = recognized_alternatives.next()
             && recognized_alternatives.next().is_none()
         {
-            (alternative.clone(), "archivio alternativo riconosciuto")
+            alternative.clone()
         } else {
-            (default.clone(), "default del provider")
+            default.clone()
         };
         if !selected.is_absolute() {
-            return Err("CODEX_HOME deve essere un percorso assoluto.");
+            return Err("CODEX_HOME must be an absolute path.");
         }
-        let homes = std::iter::once((selected.clone(), source, true))
-            .chain(absolute(configured).map(|path| (path, "CODEX_HOME", false)))
-            .chain([(home.join(".codex"), "default del provider", false)])
+        let homes = std::iter::once((selected.clone(), true, false))
+            .chain(absolute(configured).map(|path| (path, false, false)))
+            .chain([(default, false, false)])
             .chain(
                 platform_archives
                     .into_iter()
-                    .map(|path| (path, "layout piattaforma verificato", false)),
+                    .map(|path| (path, false, true)),
             );
         let mut seen = BTreeSet::new();
         let mut storage = Vec::new();
         #[cfg(windows)]
         let mut workspace_exports = Vec::new();
-        for (archive_root, source, primary) in homes {
+        for (archive_root, primary, requires_provider_marker) in homes {
             let user_home = home;
             let home = archive_root;
             if network_path(&home) && !primary {
@@ -328,7 +327,7 @@ impl Discovery {
             let key = identity(&home).unwrap_or_else(|| home.to_string_lossy().into_owned());
             if !seen.insert(key)
                 || !primary && !archive_format(&home)
-                || source == "layout piattaforma verificato" && !provider_marker(&home)
+                || requires_provider_marker && !provider_marker(&home)
             {
                 continue;
             }

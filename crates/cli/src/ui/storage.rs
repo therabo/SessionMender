@@ -37,7 +37,7 @@ fn state(app: &App) -> Result<MutexGuard<'_, ExportState>, ApiError> {
     app.exports.try_lock().map_err(|error| match error {
         TryLockError::WouldBlock => ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Inventario export occupato. Riprova tra poco.".into(),
+            "The export inventory is busy. Try again shortly.".into(),
         ),
         TryLockError::Poisoned(_) => ApiError::internal(),
     })
@@ -103,7 +103,7 @@ pub(super) async fn list(
     Query(filter): Query<Filter>,
 ) -> Result<Json<Page>, ApiError> {
     if filter.search.len() > 256 || !(1..=100).contains(&filter.limit) || filter.offset > 4_096 {
-        return Err(ApiError::bad("Filtri export fuori limite."));
+        return Err(ApiError::bad("Export filters are out of bounds."));
     }
     read(app, move |app| {
         let mut exports = state(app)?;
@@ -178,7 +178,7 @@ pub(super) async fn preview(
             .any(|key| key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit()))
     {
         return Err(ApiError::bad(
-            "Seleziona da 1 a 32 gruppi distinti dall’inventario.",
+            "Select 1 to 32 distinct groups from the inventory.",
         ));
     }
     read(app, move |app| {
@@ -197,7 +197,7 @@ pub(super) async fn preview(
                 .iter()
                 .find(|item| item.key == key)
                 .ok_or_else(|| {
-                    ApiError::conflict("Selezione cambiata. Aggiorna l’inventario export.")
+                    ApiError::conflict("The selection has changed. Refresh the export inventory.")
                 })?;
             size.logical_bytes = size.logical_bytes.saturating_add(group.size.logical_bytes);
             size.files = size.files.saturating_add(group.size.files);
@@ -271,9 +271,7 @@ pub(super) async fn confirm(
     Json(request): Json<Confirmation>,
 ) -> Result<Json<Outcome>, ApiError> {
     if !request.confirm {
-        return Err(ApiError::bad(
-            "Conferma l’eliminazione definitiva degli export.",
-        ));
+        return Err(ApiError::bad("Confirm permanent deletion of the exports."));
     }
     read(app, move |app| {
         let _mutation = app.mutations.lock().map_err(|_| ApiError::internal())?;
@@ -281,9 +279,9 @@ pub(super) async fn confirm(
         let review = exports
             .review
             .take_if(|review| review.receipt == receipt)
-            .ok_or_else(|| ApiError::conflict("Apri una nuova anteprima export."))?;
+            .ok_or_else(|| ApiError::conflict("Open a new export removal review."))?;
         if review.expires <= Instant::now() {
-            return Err(ApiError::conflict("Anteprima export scaduta."));
+            return Err(ApiError::conflict("The export removal review has expired."));
         }
         let mut outcome = Outcome::default();
         for group in review.groups {

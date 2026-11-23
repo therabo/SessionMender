@@ -124,7 +124,7 @@ export function SessionInventory({ provider, heading, switched, providerSwitched
               onLoad={!initialListsReady && index < initiallyExpandedProjects ? markListLoaded : undefined} />)}
             {!error && !loading && page?.total === 0 && info?.unassigned_sessions === 0 &&
               <EmptyState title={unavailable ? 'Archive unavailable' : emptyTitle}>
-                {unavailable && <p lang="it">{info.archive_error}</p>}
+                {unavailable && <p>{info.archive_error}</p>}
               </EmptyState>}
             {visiblePage && !error && <Pagination total={visiblePage.total} page={filters.pageIndex} pageSize={projectPageSize}
               onPage={filters.setPageIndex} label="Project pages" />}

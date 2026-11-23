@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motionDuration } from '../utils/motion'
 
-export type PreviewSelection<T> = {
+type PreviewSelection<T> = {
   item: T
   opener: HTMLElement
 }

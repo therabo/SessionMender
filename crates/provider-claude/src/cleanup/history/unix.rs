@@ -17,7 +17,7 @@ impl HistoryLock<'_> {
 
     pub(super) fn refresh(&self) -> io::Result<()> {
         if !self.held() {
-            return Err(io::Error::other("Lock della cronologia cambiato."));
+            return Err(io::Error::other("The history lock changed."));
         }
         fs::futimens(
             &self.handle,
@@ -53,7 +53,7 @@ pub(super) fn acquire(root: &File) -> io::Result<Option<HistoryLock<'_>>> {
     }
     fs::mkdirat(root, LOCK, Mode::RUSR | Mode::WUSR | Mode::XUSR).map_err(|error| {
         if error == rustix::io::Errno::EXIST {
-            io::Error::other("Cronologia occupata. Le righe sono state conservate.")
+            io::Error::other("The history file is busy. Its entries were preserved.")
         } else {
             error.into()
         }

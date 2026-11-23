@@ -43,7 +43,7 @@ impl Object {
             || (self.exclusive_file && current.st_nlink != 1)
             || FileType::from_raw_mode(current.st_mode) != self.kind
         {
-            return Err(io::Error::other("Risorsa cambiata dopo l’anteprima."));
+            return Err(io::Error::other("The resource changed after the review."));
         }
         let flags = if self.directory {
             AtFlags::REMOVEDIR
@@ -112,7 +112,7 @@ fn open_child_dir(parent: &File, name: &OsStr) -> io::Result<File> {
     let dir = fs::openat(parent, name, DIR_FLAGS, Mode::empty())?;
     if fs::fstat(&dir)?.st_dev != fs::fstat(parent)?.st_dev {
         return Err(io::Error::other(
-            "Percorso su un volume estraneo all’archivio.",
+            "The path is on a different volume from the archive.",
         ));
     }
     Ok(File::from(dir))

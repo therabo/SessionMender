@@ -35,7 +35,7 @@ fn catalog_path(root: &Path, name: &str) -> io::Result<Option<(PathBuf, bool)>> 
         Ok(meta) if meta.is_dir() && !agentmender_provider_api::filesystem::is_link(&meta) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
-        _ => return Err(io::Error::other("Directory SQLite protetta.")),
+        _ => return Err(io::Error::other("The SQLite directory is protected.")),
     }
     let database = directory.join(name);
     if !regular_file(&database)? {
@@ -45,7 +45,7 @@ fn catalog_path(root: &Path, name: &str) -> io::Result<Option<(PathBuf, bool)>> 
     let shm = regular_file(&database.with_extension("db-shm"))?;
     if wal != shm || regular_file(&database.with_extension("db-journal"))? {
         return Err(io::Error::other(
-            "File ausiliari SQLite incompleti o occupati.",
+            "SQLite sidecar files are incomplete or busy.",
         ));
     }
     Ok(Some((database, !wal)))
@@ -55,7 +55,7 @@ fn catalog_path(root: &Path, name: &str) -> io::Result<Option<(PathBuf, bool)>> 
 fn regular_file(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_file() && meta.nlink() == 1 => Ok(true),
-        Ok(_) => Err(io::Error::other("File SQLite protetto.")),
+        Ok(_) => Err(io::Error::other("The SQLite file is protected.")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
@@ -100,7 +100,7 @@ fn with_catalog(
         let _wal = root.pin_shared_file(&path.with_extension("db-wal"))?;
         let _shm = root.pin_shared_file(&path.with_extension("db-shm"))?;
         if regular_file(&path.with_extension("db-journal"))? {
-            return Err(io::Error::other("File ausiliari SQLite occupati.").into());
+            return Err(io::Error::other("SQLite sidecar files are busy.").into());
         }
         return action(path);
     }
@@ -112,7 +112,7 @@ fn with_catalog(
         for extension in ["db-wal", "db-shm", "db-journal"] {
             if regular_file(&path.with_extension(extension))? {
                 return Err(io::Error::other(
-                    "Catalogo Desktop cambiato durante la riconciliazione.",
+                    "The Desktop catalog changed during reconciliation.",
                 ));
             }
         }
@@ -130,7 +130,7 @@ fn with_catalog(
             let mut copy = fs::File::create_new(&path)?;
             if io::copy(&mut input.by_ref().take(LIMIT + 1), &mut copy)? > LIMIT {
                 return Err(io::Error::other(
-                    "Catalogo Desktop oltre il limite di lettura.",
+                    "The Desktop catalog exceeds the read limit.",
                 ));
             }
             drop(copy);
@@ -199,7 +199,7 @@ fn delete_entry(
         )?;
         probe.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
         if !probe.query_row(COMPATIBLE_SCHEMA, [], |row| row.get::<_, bool>(0))? {
-            return Err(io::Error::other("Schema del catalogo Desktop non riconosciuto.").into());
+            return Err(io::Error::other("The Desktop catalog schema is unrecognized.").into());
         }
         if !selected_entry(&probe, id)? {
             return Ok(false);
@@ -212,13 +212,13 @@ fn delete_entry(
         let mode: String = db.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
         if mode != "wal" {
             return Err(
-                io::Error::other("Modalità WAL del catalogo Desktop non verificabile.").into(),
+                io::Error::other("The Desktop catalog's WAL mode could not be verified.").into(),
             );
         }
     }
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if !tx.query_row(COMPATIBLE_SCHEMA, [], |row| row.get::<_, bool>(0))? {
-        return Err(io::Error::other("Schema del catalogo Desktop non riconosciuto.").into());
+        return Err(io::Error::other("The Desktop catalog schema is unrecognized.").into());
     }
     if !selected_entry(&tx, id)? {
         return Ok(false);
@@ -230,7 +230,9 @@ fn delete_entry(
         |row| row.get::<_, bool>(0),
     )?;
     if !host_verified {
-        return Err(io::Error::other("Host locale del catalogo Desktop non verificabile.").into());
+        return Err(
+            io::Error::other("The Desktop catalog's local host could not be verified.").into(),
+        );
     }
     let sync_updated = tx.execute(
         "UPDATE local_thread_catalog_sync_state SET observation_sequence = observation_sequence + 1
@@ -254,9 +256,10 @@ fn delete_entry(
         [],
     )?;
     if sync_updated != 1 || tombstone != 1 || revision_updated != 1 {
-        return Err(
-            io::Error::other("Stato o revisione del catalogo Desktop non verificabili.").into(),
-        );
+        return Err(io::Error::other(
+            "The Desktop catalog's state or revision could not be verified.",
+        )
+        .into());
     }
     let has_reconciliation_marker = tx.query_row(
         "SELECT EXISTS (

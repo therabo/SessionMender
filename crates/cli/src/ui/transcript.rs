@@ -45,7 +45,7 @@ pub(super) fn page(
 ) -> Result<TranscriptView, ApiError> {
     if provider == ProviderKind::Codex && !agentmender_provider_codex::CONTENT_SUPPORTED {
         return Err(ApiError::conflict(
-            "Anteprima del transcript non disponibile per questo provider.",
+            "Transcript preview is unavailable for this provider.",
         ));
     }
     let checkpoint = if let Some(cursor) = query.cursor {
@@ -57,14 +57,16 @@ pub(super) fn page(
             .get(&cursor)
             .filter(|saved| saved.key == key)
             .ok_or_else(|| {
-                ApiError::bad("Pagina scaduta. Riapri l’anteprima della conversazione.")
+                ApiError::bad("The page has expired. Reopen the conversation preview.")
             })?;
         Some(saved.checkpoint.clone())
     } else {
         None
     };
     let changed = |_| {
-        ApiError::conflict("Transcript cambiato, non leggibile o in un formato non riconosciuto.")
+        ApiError::conflict(
+            "The transcript has changed, is unreadable, or uses an unrecognized format.",
+        )
     };
     let (messages, next, complete) = match (provider, checkpoint) {
         (ProviderKind::Codex, checkpoint @ (None | Some(Checkpoint::Codex(_)))) => {
@@ -101,7 +103,7 @@ pub(super) fn page(
         }
         _ => {
             return Err(ApiError::bad(
-                "Pagina scaduta. Riapri l’anteprima della conversazione.",
+                "The page has expired. Reopen the conversation preview.",
             ));
         }
     };
