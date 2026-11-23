@@ -2,13 +2,13 @@
 use super::{LineageFact, unavailable};
 use crate::reader::{self, ObservedSource};
 use agentmender_domain::canonical_uuid;
-#[cfg(unix)]
-use agentmender_provider_api::rewrite::directory;
+#[cfg(target_os = "macos")]
+use agentmender_provider_api::rewrite::directory_with_search;
 use agentmender_provider_api::{ProviderError, filesystem};
 use rusqlite::Connection;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use rustix::fs::{self, AtFlags, Dir, FileType};
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStrExt;
 use std::{
     collections::BTreeSet,
@@ -168,7 +168,7 @@ fn rollout_id(name: &OsStr) -> Option<Uuid> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn scan_rollouts(
     root: &Path,
     folder: PathBuf,
@@ -177,11 +177,11 @@ fn scan_rollouts(
     facts: &mut Vec<LineageFact>,
     end: Instant,
 ) -> io::Result<()> {
-    let device = fs::fstat(directory(root)?)?.st_dev;
+    let device = fs::fstat(directory_with_search(root)?)?.st_dev;
     let mut pending = vec![folder];
     while let Some(path) = pending.pop() {
         check_deadline(end)?;
-        let handle = match directory(&path) {
+        let handle = match directory_with_search(&path) {
             Ok(dir) => dir,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),

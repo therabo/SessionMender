@@ -14,16 +14,40 @@ pub const DIR_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC);
 
 pub fn directory(path: &Path) -> io::Result<File> {
-    let mut parts = path.components();
+    open_directory(path, DIR_FLAGS)
+}
+
+/// Open a directory for reading without requesting read access to its ancestors.
+#[cfg(target_os = "macos")]
+pub fn directory_with_search(path: &Path) -> io::Result<File> {
+    let search = OFlags::from_bits_retain(libc::O_SEARCH as _);
+    open_directory(path, search | OFlags::NOFOLLOW | OFlags::CLOEXEC)
+}
+
+fn open_directory(path: &Path, ancestor_flags: OFlags) -> io::Result<File> {
+    let mut parts = path.components().peekable();
     if parts.next() != Some(Component::RootDir) {
         return Err(io::ErrorKind::InvalidInput.into());
     }
-    let mut dir = fs::open("/", DIR_FLAGS, Mode::empty())?;
-    for part in parts {
+    let mut dir = fs::open(
+        "/",
+        if parts.peek().is_some() {
+            ancestor_flags
+        } else {
+            DIR_FLAGS
+        },
+        Mode::empty(),
+    )?;
+    while let Some(part) = parts.next() {
         let Component::Normal(name) = part else {
             return Err(io::ErrorKind::InvalidInput.into());
         };
-        dir = fs::openat(dir, name, DIR_FLAGS, Mode::empty())?;
+        let flags = if parts.peek().is_some() {
+            ancestor_flags
+        } else {
+            DIR_FLAGS
+        };
+        dir = fs::openat(dir, name, flags, Mode::empty())?;
     }
     Ok(File::from(dir))
 }

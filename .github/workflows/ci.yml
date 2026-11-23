@@ -25,6 +25,14 @@ jobs:
       - run: cargo +stable clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo +stable build --locked --workspace
       - run: cargo +stable test --locked --workspace
+      - name: Exercise macOS Codex removal in a confined archive
+        if: runner.os == 'macOS'
+        run: |
+          native="$RUNNER_TEMP/sessionmender-codex"
+          npm install --prefix "$native" --no-audit --no-fund '@openai/codex@0.171.0-alpha.13'
+          export SESSIONMENDER_TEST_CODEX="$(find "$native" -type f -name codex -print -quit)"
+          test -x "$SESSIONMENDER_TEST_CODEX"
+          npm run test:macos --prefix ui
       - name: Exercise the Windows backend and browser with isolated archives
         if: runner.os == 'Windows'
         shell: pwsh

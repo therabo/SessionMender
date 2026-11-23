@@ -381,15 +381,8 @@ impl Inventories {
     ) -> Result<DetailView, ApiError> {
         self.with(app, provider, |snapshot| {
             let session = snapshot.selected(key)?;
-            let mut view = SessionView::new(app, snapshot, session);
-            if provider == ProviderKind::Codex && view.removal_reason.is_none() {
-                view.removal_reason = app
-                    .codex
-                    .deletion_plan(std::slice::from_ref(&session.identity), &app.protected)
-                    .err();
-            }
             Ok(DetailView {
-                session: view,
+                session: SessionView::new(app, snapshot, session),
                 conversation_preview: snapshot.conversation_preview
                     && session.transcript_bytes.is_some(),
                 claude_cleanup_supported: provider == ProviderKind::Claude

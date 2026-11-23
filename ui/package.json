@@ -6,6 +6,7 @@
     "build": "tsc --noEmit && vite build",
     "test:background": "node --test tests/ambient-background.test.mjs",
     "test:background:browser": "node --test tests/ambient-background.browser.mjs",
+    "test:macos": "node --test tests/macos-codex-removal.mjs",
     "test:windows": "node --test tests/windows-flows.mjs"
   },
   "dependencies": {
