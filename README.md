@@ -20,7 +20,7 @@ AgentMender is a local browser app for browsing and cleaning up Codex and Claude
 | Claude Code projects, sessions, transcripts, and storage | Yes | Yes | Yes |
 | Claude Code session deletion | Yes | Unavailable | Verified on Windows 11 x64 with a JSONL fixture |
 
-Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, shared files, reparse points, and incomplete export groups can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
+Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, active export leases, incomplete export groups, and Windows reparse points can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
 
 On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Workspace exports can be removed through the same review and confirmation flow as other export groups.
 
@@ -69,3 +69,5 @@ Run `npm run test:background --prefix ui` for the scene configuration and model-
 ## Permanent deletion
 
 AgentMender requires an explicit confirmation before deleting sessions or exports. **Deletion is permanent. No backups are created.** Review the affected items before confirming. A cleanup can partially succeed if files change or become inaccessible. The result reports failures and the inventory refreshes after the attempt.
+
+On macOS and Linux, export removal unlinks symbolic links and hard-link entries by name. Files and hard-link entries outside the selected groups are preserved.

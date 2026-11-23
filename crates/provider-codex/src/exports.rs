@@ -254,12 +254,18 @@ fn collect(
         revision.update(encoded.len().to_le_bytes());
         revision.update(encoded);
         revision.update(format!("{:?}", fingerprint(&metadata)));
+        #[cfg(unix)]
+        if metadata.is_file() {
+            revision.update(metadata.nlink().to_le_bytes());
+        }
         #[cfg(not(windows))]
         if let Some(entries) = observed.as_deref_mut() {
             entries.push((entry.clone(), metadata.clone()));
         }
+        let is_lease = entry.file_name().is_some_and(|name| name == LEASE);
         if filesystem::is_link(&metadata) {
             result.links += 1;
+            result.incomplete |= is_lease;
             continue;
         }
         #[cfg(windows)]
@@ -287,7 +293,7 @@ fn collect(
             continue;
         }
         if metadata.is_file() {
-            if entry.file_name().is_some_and(|name| name == LEASE) {
+            if is_lease {
                 match manifest(path, &entry) {
                     Some(lease) if lease.publication_id.is_some() => {
                         let now = unix_time(Ok(SystemTime::now())).unwrap_or(0);
@@ -472,15 +478,13 @@ fn group(
             }
         }
     }
+    let publication_alias =
+        storage.kind == StorageKind::ArtifactSessionExports && name.eq_ignore_ascii_case("latest");
+    if scan.links > 0 || scan.shared > 0 || publication_alias {
+        protection = Protection::Shared;
+    }
     if scan.in_use {
         protection = Protection::InUse;
-    }
-    if scan.links > 0
-        || scan.shared > 0
-        || storage.kind == StorageKind::ArtifactSessionExports
-            && name.eq_ignore_ascii_case("latest")
-    {
-        protection = Protection::Shared;
     }
     if !fs::symlink_metadata(path)
         .ok()
@@ -520,11 +524,12 @@ fn group(
         linked_entries: scan.links,
         protection,
         reason: status(protection),
-        removal_available: cfg!(any(unix, windows))
-            && !matches!(
-                protection,
-                Protection::Shared | Protection::InUse | Protection::Incomplete
-            ),
+        removal_available: match protection {
+            Protection::InUse | Protection::Incomplete => false,
+            // Unix unlinks each observed entry without following symbolic links.
+            Protection::Shared => cfg!(unix) && !publication_alias,
+            _ => cfg!(any(unix, windows)),
+        },
         complete: !scan.incomplete,
         #[cfg(any(unix, windows))]
         target: None,
@@ -895,5 +900,112 @@ fn removal_error(error: io::Error) -> &'static str {
             CHANGED
         }
         _ => "Il filesystem ha impedito l’eliminazione.",
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn export_storage(path: PathBuf, kind: StorageKind) -> Storage {
+        fs::create_dir(&path).unwrap();
+        Storage {
+            kind,
+            identity: identity(&path),
+            path,
+            observed: true,
+            recognized: true,
+            owned: true,
+            access: Access::Accessible,
+            inventory_available: true,
+        }
+    }
+
+    #[test]
+    fn removing_linked_exports_preserves_external_targets() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let storage = export_storage(base.join("exports"), StorageKind::ExportCandidate);
+        let outside = base.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let original = outside.join("keep.txt");
+        fs::write(&original, b"external data").unwrap();
+
+        let export = storage.path.join("export");
+        let nested = export.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        symlink(&outside, nested.join("directory-link")).unwrap();
+        symlink(outside.join("missing"), nested.join("dangling-link")).unwrap();
+        fs::hard_link(&original, nested.join("hard-link")).unwrap();
+        let alias = storage.path.join("file-link");
+        symlink(&original, &alias).unwrap();
+
+        let inventory = Inventory::scan(&[storage]);
+        assert_eq!(inventory.groups.len(), 2);
+        for group in inventory.groups {
+            assert_eq!(group.protection, Protection::Shared);
+            assert!(group.removal_available);
+            group.remove().unwrap();
+        }
+        assert!(!export.exists());
+        assert!(fs::symlink_metadata(alias).is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"external data");
+        assert_eq!(fs::metadata(original).unwrap().nlink(), 1);
+    }
+
+    #[test]
+    fn links_do_not_override_publication_protection() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let storage = export_storage(base.join("exports"), StorageKind::ArtifactSessionExports);
+        let active = storage.path.join("active");
+        let unknown = storage.path.join("unknown");
+        fs::create_dir(&active).unwrap();
+        fs::create_dir(&unknown).unwrap();
+        let lease = active.join(LEASE);
+        let now = unix_time(Ok(SystemTime::now())).unwrap();
+        fs::write(
+            &lease,
+            serde_json::json!({"publicationId": "fixture", "renewedAtMs": now * 1000}).to_string(),
+        )
+        .unwrap();
+        symlink(&base, active.join("outside")).unwrap();
+        symlink(lease, unknown.join(LEASE)).unwrap();
+        symlink(&active, storage.path.join("latest")).unwrap();
+
+        let inventory = Inventory::scan(&[storage]);
+        for (name, protection) in [
+            ("active", Protection::InUse),
+            ("unknown", Protection::Incomplete),
+            ("latest", Protection::Shared),
+        ] {
+            let group = inventory
+                .groups
+                .iter()
+                .find(|group| group.name == name)
+                .unwrap();
+            assert_eq!(group.protection, protection);
+            assert!(!group.removal_available);
+            assert_eq!(group.remove().unwrap_err().removed_entries, 0);
+        }
+    }
+
+    #[test]
+    fn a_changed_hard_link_count_requires_a_new_preview() {
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let storage = export_storage(base.join("exports"), StorageKind::ExportCandidate);
+        let export = storage.path.join("export.txt");
+        fs::write(&export, b"export").unwrap();
+        let inventory = Inventory::scan(&[storage]);
+        let group = &inventory.groups[0];
+        assert!(group.removal_available);
+
+        fs::hard_link(&export, base.join("outside.txt")).unwrap();
+        let error = group.remove().unwrap_err();
+        assert_eq!(error.reason, CHANGED);
+        assert_eq!(error.removed_entries, 0);
+        assert!(export.exists());
     }
 }

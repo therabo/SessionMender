@@ -27,5 +27,8 @@ zstd = { version = "=0.13.3", default-features = false }
 [target.'cfg(windows)'.dependencies]
 tempfile.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
