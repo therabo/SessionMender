@@ -20,6 +20,32 @@ use windows_sys::Win32::Storage::FileSystem::{
     SetFileInformationByHandle,
 };
 
+/// Resolve Documents for the current Windows account, including redirection.
+pub fn documents_directory() -> Option<PathBuf> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt, ptr, slice};
+    use windows_sys::Win32::{
+        System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
+        UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath},
+    };
+
+    // SAFETY: COM is initialized and uninitialized on this thread. On success,
+    // the shell returns a terminated UTF-16 string owned by the COM allocator.
+    unsafe {
+        if CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as u32) < 0 {
+            return None;
+        }
+        let mut buffer = ptr::null_mut();
+        let result = SHGetKnownFolderPath(&FOLDERID_Documents, 0, ptr::null_mut(), &mut buffer);
+        let path = (result >= 0 && !buffer.is_null()).then(|| {
+            let length = (0..).take_while(|&index| *buffer.add(index) != 0).count();
+            PathBuf::from(OsString::from_wide(slice::from_raw_parts(buffer, length)))
+        });
+        CoTaskMemFree(buffer.cast());
+        CoUninitialize();
+        path.filter(|path| path.is_absolute())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Identity {
     pub volume: u64,

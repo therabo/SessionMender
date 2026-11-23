@@ -45,7 +45,26 @@ pub(super) fn archive_candidates(home: &Path) -> Vec<PathBuf> {
 }
 
 pub(super) fn user_output(home: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(documents) = agentmender_provider_api::filesystem::documents_directory() {
+        return documents.join("Codex");
+    }
     home.join("Documents").join("Codex")
+}
+
+#[cfg(windows)]
+pub(super) fn workspace_exports(workspace: &Path) -> impl Iterator<Item = Storage> + '_ {
+    ["export", "exports"].into_iter().filter_map(move |name| {
+        let candidate = row(
+            StorageKind::WorkspaceExports,
+            workspace.join(name),
+            false,
+            false,
+        );
+        (candidate.identity.is_some()
+            && std::fs::symlink_metadata(&candidate.path).is_ok_and(|metadata| metadata.is_dir()))
+        .then_some(candidate)
+    })
 }
 
 pub(super) fn cli_candidates(home: &Path) -> Vec<PathBuf> {

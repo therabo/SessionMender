@@ -24,6 +24,7 @@ pub enum StorageKind {
     ExportCandidate,
     ArtifactSessionExports,
     ExternalExports,
+    WorkspaceExports,
     Attachments,
     GeneratedImages,
     Cache,
@@ -31,6 +32,18 @@ pub enum StorageKind {
     Worktrees,
     UserOutput,
     DesktopProfile,
+}
+
+impl StorageKind {
+    pub(crate) fn is_export(self) -> bool {
+        matches!(
+            self,
+            Self::ExportCandidate
+                | Self::ArtifactSessionExports
+                | Self::ExternalExports
+                | Self::WorkspaceExports
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,12 +264,6 @@ fn row(kind: StorageKind, path: PathBuf, recognized: bool, owned: bool) -> Stora
             && path
                 .parent()
                 .is_some_and(|parent| self::access(parent) == Access::Accessible);
-    let export = matches!(
-        kind,
-        StorageKind::ExportCandidate
-            | StorageKind::ArtifactSessionExports
-            | StorageKind::ExternalExports
-    );
     Storage {
         kind,
         identity: (access == Access::Accessible)
@@ -267,7 +274,7 @@ fn row(kind: StorageKind, path: PathBuf, recognized: bool, owned: bool) -> Stora
         recognized,
         owned,
         access,
-        inventory_available: access == Access::Accessible && export,
+        inventory_available: access == Access::Accessible && kind.is_export(),
     }
 }
 
@@ -310,6 +317,8 @@ impl Discovery {
             );
         let mut seen = BTreeSet::new();
         let mut storage = Vec::new();
+        #[cfg(windows)]
+        let mut workspace_exports = Vec::new();
         for (archive_root, source, primary) in homes {
             let user_home = home;
             let home = archive_root;
@@ -363,16 +372,18 @@ impl Discovery {
                 storage.push(row(StorageKind::Logs, logs, recognized, recognized));
             }
             let desktop = settings.desktop.unwrap_or_default();
+            let workspace = absolute(desktop.workspace_root)
+                .unwrap_or_else(|| platform::user_output(user_home));
+            #[cfg(windows)]
+            if primary {
+                workspace_exports.extend(platform::workspace_exports(&workspace));
+            }
             for (kind, path) in [
                 (
                     StorageKind::Worktrees,
                     absolute(desktop.worktree_root).unwrap_or_else(|| home.join("worktrees")),
                 ),
-                (
-                    StorageKind::UserOutput,
-                    absolute(desktop.workspace_root)
-                        .unwrap_or_else(|| platform::user_output(user_home)),
-                ),
+                (StorageKind::UserOutput, workspace),
             ] {
                 let observation = row(
                     kind,
@@ -388,6 +399,8 @@ impl Discovery {
 
         let (mut installations, desktop_storage) = platform::desktop(home);
         storage.extend(desktop_storage);
+        #[cfg(windows)]
+        storage.extend(workspace_exports);
         if let Some(path) = environment("ARTIFACT_SESSION_HOST_EXPORT_ROOT") {
             let mut external = row(StorageKind::ExternalExports, path, false, false);
             if selected.starts_with(&external.path) || home.starts_with(&external.path) {

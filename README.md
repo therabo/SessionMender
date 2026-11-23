@@ -22,6 +22,8 @@ AgentMender is a local browser app for browsing and cleaning up Codex and Claude
 
 Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, shared files, reparse points, and incomplete export groups can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
 
+On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Automatically discovered workspace exports are available for inspection only.
+
 ## Build and run locally
 
 Install Rust 1.89 or later with Cargo and Node.js 22 with npm. Bundled SQLite and Zstandard require a C compiler on macOS and Windows. On Windows, install Visual Studio Build Tools with the Desktop development with C++ workload and a Windows SDK, then use an MSVC Rust toolchain matching your architecture. From the repository root, build the React frontend first so Cargo can embed it in the executable.

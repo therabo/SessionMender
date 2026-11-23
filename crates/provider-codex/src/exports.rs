@@ -437,7 +437,10 @@ fn group(
             .and_then(|e| safe_label(e.to_string_lossy().into_owned()))
             .unwrap_or_else(|| "File".into())
     };
-    let mut protection = if storage.kind == StorageKind::ExternalExports {
+    let mut protection = if matches!(
+        storage.kind,
+        StorageKind::ExternalExports | StorageKind::WorkspaceExports
+    ) {
         Protection::UserOutput
     } else {
         Protection::UnknownOwner
@@ -536,7 +539,7 @@ impl Inventory {
         let mut complete = true;
         let mut seen = HashSet::new();
         let mut allocation = Allocation::default();
-        for root in storage.iter().filter(|item| export_kind(item.kind)) {
+        for root in storage.iter().filter(|item| item.kind.is_export()) {
             let Some(id) = &root.identity else {
                 complete &= !root.observed;
                 continue;
@@ -547,9 +550,10 @@ impl Inventory {
             }
             if root.kind == StorageKind::ExternalExports
                 && storage.iter().any(|other| {
-                    other.kind != StorageKind::ExternalExports
-                        && export_kind(other.kind)
-                        && other.inventory_available
+                    matches!(
+                        other.kind,
+                        StorageKind::ExportCandidate | StorageKind::ArtifactSessionExports
+                    ) && other.inventory_available
                         && other.identity.as_ref() == Some(id)
                 })
             {
@@ -671,23 +675,17 @@ impl Inventory {
     }
 }
 
-fn export_kind(kind: StorageKind) -> bool {
-    matches!(
-        kind,
-        StorageKind::ExportCandidate
-            | StorageKind::ArtifactSessionExports
-            | StorageKind::ExternalExports
-    )
-}
-
 #[cfg(any(unix, windows))]
 fn removal_scope(storage: &[Storage], root: &Storage) -> Result<HashSet<String>, &'static str> {
+    if root.kind == StorageKind::WorkspaceExports {
+        return Err("Gli export rilevati nella directory di lavoro sono in sola lettura.");
+    }
     if root.kind == StorageKind::ArtifactSessionExports && !root.recognized {
         return Err("La root Artifact Session non è verificata.");
     }
-    let others = storage
-        .iter()
-        .filter(|other| other.observed && !std::ptr::eq(*other, root));
+    let others = storage.iter().filter(|other| {
+        other.observed && other.kind != StorageKind::WorkspaceExports && !std::ptr::eq(*other, root)
+    });
     if root.kind == StorageKind::ExternalExports {
         let ancestors: HashSet<_> = root.path.ancestors().filter_map(identity).collect();
         if others.clone().any(|other| match other.kind {

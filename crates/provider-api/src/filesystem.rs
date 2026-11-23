@@ -12,7 +12,7 @@ pub(crate) use windows::open_registered_executable;
 #[cfg(windows)]
 pub use windows::rewrite::{DirectoryLock, directory, open_file, replace};
 #[cfg(windows)]
-pub use windows::{Directory, Identity, Item, canonical_local_path};
+pub use windows::{Directory, Identity, Item, canonical_local_path, documents_directory};
 
 /// Detect Windows junctions and other reparse points as well as Unix symlinks.
 pub fn is_link(metadata: &fs::Metadata) -> bool {

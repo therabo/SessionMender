@@ -34,6 +34,10 @@ async function fixture() {
     cwd: codex, env, encoding: 'utf8', timeout: 20000, windowsHide: true,
   })
   assert.equal(bootstrap.status, 1, bootstrap.stderr)
+  await writeFile(join(codex, 'config.toml'), `[desktop]\nworkspace-root = ${JSON.stringify(workspace)}\n`)
+  await mkdir(join(workspace, 'export', 'empty workspace export'), { recursive: true })
+  await mkdir(join(workspace, 'exports'))
+  await writeFile(join(workspace, 'exports', 'workspace output.txt'), 'output')
   const db = new DatabaseSync(join(codex, 'state_5.sqlite'))
   db.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0')
   const project = uuid(10)
@@ -244,6 +248,13 @@ test('Windows native Codex, Claude and export review and confirmation', { timeou
     assert.equal(await readFile(join(data.claude, 'history.jsonl'), 'utf8'), jsonl([{ sessionId: uuid(9) }]))
 
     const groups = (await api('/storage/exports')).rows
+    const workspaceGroups = groups.filter(group => group.root === join(data.workspace, 'export')
+      || group.root === join(data.workspace, 'exports'))
+    assert.deepEqual(workspaceGroups.map(group => group.name).sort(), ['empty workspace export', 'workspace output.txt'])
+    assert.ok(workspaceGroups.every(group => group.protection === 'user_output' && group.session_id === null && !group.removal_available))
+    const workspacePreview = await api('/storage/exports/preview', { keys: workspaceGroups.map(group => group.key) })
+    assert.equal(workspacePreview.removable, 0)
+    assert.equal(workspacePreview.receipt, null)
     assert.equal(groups.find(group => group.name === 'leased').removal_available, false)
     assert.equal(groups.find(group => group.name === 'junction').removal_available, false)
     for (const names of [['backup A'], ['backup B', 'backup C']]) {
