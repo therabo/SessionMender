@@ -22,7 +22,7 @@ AgentMender is a local browser app for browsing and cleaning up Codex and Claude
 
 Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, shared files, reparse points, and incomplete export groups can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
 
-On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Automatically discovered workspace exports are available for inspection only.
+On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Workspace exports can be removed through the same review and confirmation flow as other export groups.
 
 ## Build and run locally
 

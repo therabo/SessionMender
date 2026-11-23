@@ -677,16 +677,17 @@ impl Inventory {
 
 #[cfg(any(unix, windows))]
 fn removal_scope(storage: &[Storage], root: &Storage) -> Result<HashSet<String>, &'static str> {
-    if root.kind == StorageKind::WorkspaceExports {
-        return Err("Gli export rilevati nella directory di lavoro sono in sola lettura.");
-    }
     if root.kind == StorageKind::ArtifactSessionExports && !root.recognized {
         return Err("La root Artifact Session non è verificata.");
     }
+    // Automatically discovered roots yield to provider and explicit roots.
     let others = storage.iter().filter(|other| {
         other.observed && other.kind != StorageKind::WorkspaceExports && !std::ptr::eq(*other, root)
     });
-    if root.kind == StorageKind::ExternalExports {
+    if matches!(
+        root.kind,
+        StorageKind::ExternalExports | StorageKind::WorkspaceExports
+    ) {
         let ancestors: HashSet<_> = root.path.ancestors().filter_map(identity).collect();
         if others.clone().any(|other| match other.kind {
             StorageKind::Home => root.identity == other.identity,

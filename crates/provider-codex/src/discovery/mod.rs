@@ -376,7 +376,18 @@ impl Discovery {
                 .unwrap_or_else(|| platform::user_output(user_home));
             #[cfg(windows)]
             if primary {
-                workspace_exports.extend(platform::workspace_exports(&workspace));
+                workspace_exports.extend(platform::workspace_exports(&workspace).filter(|item| {
+                    // Apply the same boundary as an explicit external export root.
+                    // Compare identities as well for Windows aliases and casing.
+                    [selected.as_path(), user_home]
+                        .into_iter()
+                        .all(|protected| {
+                            !protected.starts_with(&item.path)
+                                && !protected.ancestors().any(|ancestor| {
+                                    identity(ancestor).as_ref() == item.identity.as_ref()
+                                })
+                        })
+                }));
             }
             for (kind, path) in [
                 (
