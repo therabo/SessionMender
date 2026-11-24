@@ -19,6 +19,9 @@ pub struct DeletionPlan {
     #[cfg(windows)]
     #[serde(skip)]
     root_identity: agentmender_provider_api::filesystem::Identity,
+    #[cfg(target_os = "linux")]
+    #[serde(skip)]
+    root_identity: (u64, u64),
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -27,7 +30,7 @@ struct Tree {
     descendants: Vec<Descendant>,
     #[serde(skip)]
     archived: bool,
-    #[cfg(windows)]
+    #[cfg(any(target_os = "linux", windows))]
     #[serde(skip)]
     rollouts: BTreeMap<Uuid, BTreeMap<PathBuf, String>>,
 }
@@ -56,7 +59,7 @@ struct Node {
     present: bool,
     archived: bool,
     uncertain: bool,
-    #[cfg(windows)]
+    #[cfg(any(target_os = "linux", windows))]
     rollouts: BTreeMap<PathBuf, String>,
 }
 
@@ -86,7 +89,7 @@ impl Archive {
                     archive.children.entry(parent).or_default().insert(child);
                 }
                 LineageFact::Uncertain(id) => archive.nodes.entry(id).or_default().uncertain = true,
-                #[cfg(windows)]
+                #[cfg(any(target_os = "linux", windows))]
                 LineageFact::Rollout { id, path, revision } => {
                     let node = archive.nodes.entry(id).or_default();
                     node.rollouts.insert(path, revision);
@@ -145,7 +148,7 @@ impl Archive {
         Ok(Tree {
             id,
             archived: root.archived,
-            #[cfg(windows)]
+            #[cfg(any(target_os = "linux", windows))]
             rollouts: seen
                 .into_iter()
                 .map(|id| (id, self.nodes[&id].rollouts.clone()))
@@ -155,11 +158,11 @@ impl Archive {
     }
 
     fn rollout_changed(&self, node: &Node, tree: &Tree, id: Uuid) -> bool {
-        #[cfg(windows)]
+        #[cfg(any(target_os = "linux", windows))]
         return node.rollouts.iter().any(|(path, revision)| {
             tree.rollouts.get(&id).and_then(|entries| entries.get(path)) != Some(revision)
         });
-        #[cfg(not(windows))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _ = (node, tree, id);
             false
@@ -224,10 +227,10 @@ impl CodexAdapter {
     }
 
     fn selected_root(&self) -> Result<PathBuf, String> {
-        #[cfg(windows)]
+        #[cfg(any(target_os = "linux", windows))]
         return crate::discovery::verified_read_root(&self.location.state_root)
             .map_err(|error| error.to_string());
-        #[cfg(not(windows))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         self.location
             .state_root
             .canonicalize()
@@ -243,6 +246,8 @@ impl CodexAdapter {
         #[cfg(windows)]
         let directory = agentmender_provider_api::filesystem::Directory::open(&root)
             .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "linux")]
+        let root_identity = linux_root_identity(&root)?;
         let ids = sessions
             .iter()
             .map(|identity| {
@@ -274,13 +279,15 @@ impl CodexAdapter {
             protected: protected.to_vec(),
             #[cfg(windows)]
             root_identity: directory.item().identity,
+            #[cfg(target_os = "linux")]
+            root_identity,
         })
     }
 
     pub fn native_removal_reason(&self) -> Option<&'static str> {
-        #[cfg(not(any(target_os = "macos", windows)))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         return Some("Codex removal is unavailable on this platform.");
-        #[cfg(any(target_os = "macos", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         {
             let Some(executable) = self
                 .location
@@ -290,7 +297,11 @@ impl CodexAdapter {
             else {
                 return Some("The Codex executable is unavailable.");
             };
-            #[cfg(windows)]
+            #[cfg(target_os = "linux")]
+            if !Path::new("/usr/bin/bwrap").is_file() {
+                return Some("Codex removal on Linux requires Bubblewrap.");
+            }
+            #[cfg(any(target_os = "linux", windows))]
             if process::codex_delete_version(executable).is_err() {
                 return Some(
                     "The Codex CLI version or delete --force command could not be verified.",
@@ -338,12 +349,25 @@ impl CodexAdapter {
             .to_str()
             .ok_or("The Codex archive path cannot be represented.")?;
         let setting = format!("sqlite_home={}", toml::Value::String(path.to_owned()));
-        let native = |id| process::codex_delete(executable, &plan.root, &setting, id);
+        let native = |id| {
+            #[cfg(target_os = "linux")]
+            {
+                if linux_root_identity(&plan.root)? != plan.root_identity {
+                    return Err("The Codex archive changed before native deletion.".into());
+                }
+                verify_linux_database_files(&plan.root)?;
+            }
+            process::codex_delete(executable, &plan.root, &setting, id)
+        };
         Ok(delete(&plan, native, || {
             if self.selected_root()? != plan.root {
                 return Err(
                     "The Codex archive has changed. Deletion could not be verified.".into(),
                 );
+            }
+            #[cfg(target_os = "linux")]
+            if linux_root_identity(&plan.root)? != plan.root_identity {
+                return Err("The Codex archive changed during deletion.".into());
             }
             self.archive()
         }))
@@ -393,6 +417,39 @@ impl CodexAdapter {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_root_identity(root: &Path) -> Result<(u64, u64), String> {
+    use std::os::unix::fs::MetadataExt;
+    agentmender_provider_api::rewrite::directory_with_search(root)
+        .and_then(|directory| directory.metadata())
+        .map(|info| (info.dev(), info.ino()))
+        .map_err(|error| format!("The Codex archive identity could not be verified: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+fn verify_linux_database_files(root: &Path) -> Result<(), String> {
+    use agentmender_provider_api::{ProviderError, filesystem};
+    for name in [
+        "state_5.sqlite",
+        "state_5.sqlite-wal",
+        "state_5.sqlite-shm",
+        "state_5.sqlite-journal",
+    ] {
+        match filesystem::open_source_read(root, &root.join(name)) {
+            Ok(_) => {}
+            Err(ProviderError::CapabilityUnavailable(reason))
+                if reason == "source file missing" && name != "state_5.sqlite" => {}
+            Err(_) => {
+                return Err(format!(
+                    "{name}: the Codex database file could not be verified."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
 fn waiting_for_children(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
     error.contains("cannot delete")
@@ -429,8 +486,10 @@ fn delete(
                 .filter(|child| child.present)
                 .map(|child| child.id),
         );
-        let removal = run_native(tree.id, &native, &observe, &mut outcome, &mut archive);
-        let refusal = match removal {
+        // Linux Codex may report a generic failure for a parent that still has
+        // attached children. Remove only the reviewed descendants first.
+        #[cfg(not(target_os = "linux"))]
+        let refusal = match run_native(tree.id, &native, &observe, &mut outcome, &mut archive) {
             Ok(message) => {
                 messages.insert(tree.id, message);
                 None
@@ -459,27 +518,33 @@ fn delete(
                 outcome.errors.push(format!("{}: {error}", child.id));
             }
         }
-        if let Some(error) = refusal {
-            match archive.as_ref() {
-                Some(current) if !current.present(tree.id) => {}
-                Some(current)
-                    if !current
-                        .blocked_writes(tree, &mut changes)
-                        .contains(&tree.id)
-                        && tree
-                            .descendants
-                            .iter()
-                            .all(|child| !current.present(child.id)) =>
-                {
-                    match run_native(tree.id, &native, &observe, &mut outcome, &mut archive) {
-                        Ok(message) => {
-                            messages.insert(tree.id, message);
-                        }
-                        Err(error) => outcome.errors.push(format!("{}: {error}", tree.id)),
+        #[cfg(not(target_os = "linux"))]
+        let Some(blocked_reason) = refusal else {
+            continue;
+        };
+        #[cfg(target_os = "linux")]
+        let blocked_reason = "The session or its reviewed descendants could not be reverified.";
+        match archive.as_ref() {
+            Some(current) if !current.present(tree.id) => {}
+            Some(current)
+                if !current
+                    .blocked_writes(tree, &mut changes)
+                    .contains(&tree.id)
+                    && tree
+                        .descendants
+                        .iter()
+                        .all(|child| !current.present(child.id)) =>
+            {
+                match run_native(tree.id, &native, &observe, &mut outcome, &mut archive) {
+                    Ok(message) => {
+                        messages.insert(tree.id, message);
                     }
+                    Err(error) => outcome.errors.push(format!("{}: {error}", tree.id)),
                 }
-                _ => outcome.errors.push(format!("{}: {error}", tree.id)),
             }
+            _ => outcome
+                .errors
+                .push(format!("{}: {blocked_reason}", tree.id)),
         }
     }
     outcome.errors.extend(changes);
@@ -519,13 +584,13 @@ fn run_native(
 }
 
 fn cleanup(root: &Path, id: Uuid, outcome: &mut Deletion) {
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     outcome.errors.extend(
         crate::cleanup::after_native_delete(root, id)
             .into_iter()
             .map(|error| format!("{id}: additional cleanup was incomplete. {error}")),
     );
-    #[cfg(not(any(target_os = "macos", windows)))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     let _ = (root, id, outcome);
 }
 

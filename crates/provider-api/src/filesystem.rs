@@ -167,7 +167,7 @@ pub fn open_observed_read(root: &Path, path: &Path) -> Result<fs::File, Provider
     open_regular(root, path)
 }
 
-/// Descriptor-relative no-follow source read, used only inside attested workers.
+/// Descriptor-relative, no-follow source read for bounded provider readers.
 /// Returning a reader grants no write or arbitrary command capability.
 pub fn open_source_read(root: &Path, path: &Path) -> Result<fs::File, ProviderError> {
     #[cfg(unix)]
@@ -186,12 +186,29 @@ pub fn open_source_read(root: &Path, path: &Path) -> Result<fs::File, ProviderEr
                 "invalid source components".into(),
             ));
         }
+        #[cfg(not(target_os = "linux"))]
         let mut directory = open(
             root,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         )
         .map_err(source_open_error)?;
+        #[cfg(target_os = "linux")]
+        let mut directory = {
+            let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let absolute = root
+                .strip_prefix("/")
+                .map_err(|_| ProviderError::InvalidScope("source root must be absolute".into()))?;
+            let mut directory = open("/", flags, Mode::empty()).map_err(source_open_error)?;
+            for component in absolute.components() {
+                let Component::Normal(name) = component else {
+                    return Err(ProviderError::InvalidScope("invalid source root".into()));
+                };
+                directory =
+                    openat(&directory, name, flags, Mode::empty()).map_err(source_open_error)?;
+            }
+            directory
+        };
         for component in &components[..components.len() - 1] {
             directory = openat(
                 &directory,

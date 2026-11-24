@@ -14,15 +14,20 @@ SessionMender is a local browser app for browsing and cleaning up Codex and Clau
 | Capability | macOS | Linux | Windows |
 | --- | --- | --- | --- |
 | Codex installation, archive, and export inventory | Yes | Yes | Yes |
-| Codex projects, sessions, transcripts, and descendant review | Yes | Unavailable | Verified on Windows 11 x64 |
-| Codex session and project-session deletion, with local reference cleanup | Requires a supported native Codex executable | Unavailable | Requires native Codex `0.171.0-alpha.13`. Verified on Windows 11 x64. |
+| Codex projects, sessions, and transcripts | Yes | Yes | Verified on Windows 11 x64 |
+| Codex descendant review | Yes | Yes | Verified on Windows 11 x64 |
+| Codex session and project-session deletion, with local reference cleanup | Requires a supported native Codex executable | Requires Bubblewrap and a native Codex executable with `delete --force` | Requires native Codex `0.171.0-alpha.13`. Verified on Windows 11 x64. |
 | Codex export deletion | Yes | Yes, with `openat2` required for directories | Verified on Windows 11 x64 |
 | Claude Code projects, sessions, transcripts, and storage | Yes | Yes | Yes |
 | Claude Code session deletion | Yes | Unavailable | Verified on Windows 11 x64 with a JSONL fixture |
 
-Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, active export leases, incomplete export groups, and Windows reparse points can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
+Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Linux and Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, active export leases, incomplete export groups, and Windows reparse points can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
 
 On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Workspace exports can be removed through the same review and confirmation flow as other export groups.
+
+On Linux, Exports looks for `exports` in the selected Codex archive (`~/.codex/exports` by default). SessionMender does not create that directory. Set `ARTIFACT_SESSION_HOST_EXPORT_ROOT` to an absolute path before launch to include a separate export directory.
+
+On Linux, Bubblewrap (`/usr/bin/bwrap`) runs native deletion with write access to the selected archive and private scratch space. After verifying removal, SessionMender cleans matching local history, index, and JSON state entries. Desktop SQLite catalog reconciliation is available on macOS and Windows.
 
 ## Quick Start
 

@@ -1,7 +1,7 @@
 //! Scoped replacement of provider files after a successful rewrite.
 #[cfg(unix)]
 mod unix;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix::directory_with_search;
 #[cfg(unix)]
 pub use unix::{DIR_FLAGS, directory, open_file, replace};

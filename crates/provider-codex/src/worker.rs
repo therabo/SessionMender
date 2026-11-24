@@ -1,20 +1,20 @@
-//! Fixed operations in the confined Codex reader process.
-#[cfg(any(target_os = "macos", windows))]
+//! Fixed operations for the bounded Codex archive reader.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod inventory;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod lineage;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod projects;
 
 use crate::CodexAdapter;
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 use crate::Guard;
 use agentmender_domain::{
     CodexMembership, InventoryObservation, ProjectLocator, ProviderKind, RegisteredProject,
     Session, SessionIdentity, TranscriptMessage,
 };
 use agentmender_provider_api::{ProviderError, validate_location};
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 use agentmender_provider_api::{evidence::EvidenceSandbox, process};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,14 +24,14 @@ use std::{
 };
 use uuid::Uuid;
 
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 use std::{
     io::{BufRead, BufReader, Read, Write},
     sync::mpsc,
 };
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 const MAX_REQUEST: usize = 64 * 1024;
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 const MAX_OUTPUT: usize = 128 * 1024;
 const PAGE_ROWS: usize = 128;
 const LINEAGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -108,7 +108,7 @@ pub(super) enum LineageFact {
         child: Uuid,
     },
     Uncertain(Uuid),
-    #[cfg(windows)]
+    #[cfg(any(target_os = "linux", windows))]
     Rollout {
         id: Uuid,
         path: PathBuf,
@@ -122,7 +122,7 @@ struct LineagePage {
     next: Option<usize>,
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn lineage_page(facts: &[LineageFact], offset: usize) -> Result<Response, ProviderError> {
     let end = offset.saturating_add(PAGE_ROWS).min(facts.len());
     let page = facts.get(offset..end).ok_or_else(stale)?.to_vec();
@@ -132,7 +132,7 @@ fn lineage_page(facts: &[LineageFact], offset: usize) -> Result<Response, Provid
     }))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -161,9 +161,9 @@ enum Operation {
 
 #[derive(Serialize, Deserialize)]
 enum Response {
-    #[cfg(not(windows))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     Unavailable,
-    #[cfg(not(windows))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     Stale,
     Inventory(InventoryPage),
     Transcript(TranscriptPage),
@@ -179,13 +179,13 @@ pub(super) fn stale() -> ProviderError {
     ProviderError::InvalidScope("stale_codex_source".into())
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 struct Snapshot {
     files: Vec<crate::snapshot::FileFingerprint>,
     db: rusqlite::Connection,
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn observe(
     root: &std::path::Path,
     operation: Operation,
@@ -346,7 +346,7 @@ pub fn run_worker() -> Result<(), ProviderError> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub(super) struct Connection {
     child: Guard,
     sandbox: EvidenceSandbox,
@@ -354,7 +354,7 @@ pub(super) struct Connection {
     output: mpsc::Receiver<std::io::Result<Vec<u8>>>,
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 impl Connection {
     fn start(adapter: &CodexAdapter) -> Result<Self, ProviderError> {
         let sandbox = EvidenceSandbox::new(&adapter.location.state_root, &adapter.home)?;
@@ -441,14 +441,14 @@ impl Connection {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "linux", windows))]
 pub(super) struct Connection {
     root: PathBuf,
     resident: Option<Snapshot>,
     lineage: Vec<LineageFact>,
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "linux", windows))]
 impl Connection {
     fn start(adapter: &CodexAdapter) -> Result<Self, ProviderError> {
         Ok(Self {
@@ -467,6 +467,7 @@ impl Connection {
             return Err(stale());
         }
         let root = crate::discovery::verified_read_root(&self.root)?;
+        #[cfg(windows)]
         let _directory =
             agentmender_provider_api::filesystem::Directory::open(&root).map_err(|_| stale())?;
         observe(&root, operation, &mut self.resident, &mut self.lineage)
@@ -475,9 +476,9 @@ impl Connection {
 
 impl CodexAdapter {
     fn observation_root(&self) -> Result<PathBuf, ProviderError> {
-        #[cfg(windows)]
+        #[cfg(any(target_os = "linux", windows))]
         return crate::discovery::verified_read_root(&self.location.state_root);
-        #[cfg(not(windows))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         self.location
             .state_root
             .canonicalize()
@@ -506,9 +507,9 @@ impl CodexAdapter {
         if result.is_err() {
             *slot = None;
         }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "linux", windows))]
         return result;
-        #[cfg(not(windows))]
+        #[cfg(not(any(target_os = "linux", windows)))]
         match result? {
             Response::Unavailable => Err(unavailable()),
             Response::Stale => Err(stale()),

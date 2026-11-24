@@ -64,7 +64,6 @@ impl OpenTranscript {
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
 pub(super) fn current_anchor(
     identity: &SessionIdentity,
     locator: Option<&Path>,
@@ -266,7 +265,6 @@ pub(super) fn header(
     Ok((header_bytes.len(), format))
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ObservedSource {
     Main,
@@ -274,7 +272,6 @@ pub(super) enum ObservedSource {
     Other,
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum SourceValue {
@@ -282,7 +279,6 @@ enum SourceValue {
     Structured { subagent: Option<SubagentSource> },
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SubagentSource {
@@ -293,7 +289,6 @@ enum SubagentSource {
     Other(String),
 }
 
-#[cfg(any(target_os = "macos", windows))]
 impl ObservedSource {
     fn from_marker(source: Option<&SourceValue>) -> Result<Self, ProviderError> {
         match source {
@@ -332,7 +327,6 @@ impl ObservedSource {
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 struct RelationshipHeader {
     #[serde(rename = "type")]
@@ -340,7 +334,6 @@ struct RelationshipHeader {
     payload: RelationshipMeta,
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 pub(super) struct RelationshipMeta {
     pub id: String,
@@ -356,13 +349,11 @@ pub(super) struct RelationshipMeta {
     pub history_base: Option<HistoryBase>,
 }
 
-#[cfg(any(target_os = "macos", windows))]
 #[derive(serde::Deserialize)]
 pub(super) struct HistoryBase {
     pub thread_id: String,
 }
 
-#[cfg(any(target_os = "macos", windows))]
 impl RelationshipMeta {
     pub fn source(&self) -> Result<ObservedSource, ProviderError> {
         ObservedSource::from_marker(self.source.as_ref())
@@ -387,7 +378,6 @@ impl RelationshipMeta {
     }
 }
 
-#[cfg(any(target_os = "macos", windows))]
 pub(super) fn relationship_header(
     file: &fs::File,
     path: &Path,

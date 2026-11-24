@@ -2,13 +2,13 @@
 use super::{LineageFact, unavailable};
 use crate::reader::{self, ObservedSource};
 use agentmender_domain::canonical_uuid;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use agentmender_provider_api::rewrite::directory_with_search;
 use agentmender_provider_api::{ProviderError, filesystem};
 use rusqlite::Connection;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use rustix::fs::{self, AtFlags, Dir, FileType};
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::{
     collections::BTreeSet,
@@ -55,7 +55,7 @@ pub(super) fn read(
             Ok(Some(locator)) => match reader::open_transcript(root, Some(Path::new(&locator))) {
                 Ok((file, path)) => {
                     visited.insert(path.clone());
-                    #[cfg(windows)]
+                    #[cfg(any(target_os = "linux", windows))]
                     facts.push(LineageFact::Rollout {
                         id,
                         path: path.clone(),
@@ -168,7 +168,7 @@ fn rollout_id(name: &OsStr) -> Option<Uuid> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn scan_rollouts(
     root: &Path,
     folder: PathBuf,
@@ -212,9 +212,19 @@ fn scan_rollouts(
             {
                 let expected = rollout_id(name);
                 match filesystem::open_source_read(root, &child) {
-                    Ok(file) => record_header(facts, expected, archived, end, |id, end| {
-                        reader::relationship_header(&file, &child, id, end)
-                    })?,
+                    Ok(file) => {
+                        #[cfg(target_os = "linux")]
+                        if let Some(id) = expected {
+                            facts.push(LineageFact::Rollout {
+                                id,
+                                path: child.clone(),
+                                revision: reader::stamp(&file).map_err(io::Error::other)?,
+                            });
+                        }
+                        record_header(facts, expected, archived, end, |id, end| {
+                            reader::relationship_header(&file, &child, id, end)
+                        })?;
+                    }
                     Err(_) => {
                         if let Some(id) = expected {
                             facts.push(LineageFact::Uncertain(id));

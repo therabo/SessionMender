@@ -183,21 +183,47 @@ fn settings(root: &Path) -> Settings {
         .unwrap_or_default()
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "linux", windows))]
 pub(crate) fn verified_read_root(
     root: &Path,
 ) -> Result<PathBuf, agentmender_provider_api::ProviderError> {
     use agentmender_provider_api::ProviderError;
+    #[cfg(windows)]
     let directory = filesystem::Directory::open(root).map_err(|error| {
         ProviderError::CapabilityUnavailable(format!(
             "local Codex root could not be verified: {error}"
         ))
     })?;
+    #[cfg(windows)]
     let path = directory.path();
+    #[cfg(target_os = "linux")]
+    let canonical = {
+        let canonical = root
+            .canonicalize()
+            .map_err(|error| agentmender_provider_api::io_error(root, error))?;
+        if canonical != root || access(root) != Access::Accessible || !root.is_dir() {
+            return Err(ProviderError::CapabilityUnavailable(
+                "local Codex root could not be verified".into(),
+            ));
+        }
+        canonical
+    };
+    #[cfg(target_os = "linux")]
+    let path = canonical.as_path();
     let config = path.join("config.toml");
-    let configured = match directory.inspect(&config) {
-        Ok(_) => {
-            let bytes = filesystem::read_bounded(path, &config, 256 * 1024)?;
+    let configured = match filesystem::open_source_read(path, &config) {
+        Ok(file) => {
+            use std::io::Read;
+            const CONFIG_LIMIT: u64 = 256 * 1024;
+            let mut bytes = Vec::new();
+            file.take(CONFIG_LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| agentmender_provider_api::io_error(&config, error))?;
+            if bytes.len() as u64 > CONFIG_LIMIT {
+                return Err(ProviderError::CapabilityUnavailable(
+                    "Codex config.toml exceeds the read limit".into(),
+                ));
+            }
             let text = std::str::from_utf8(&bytes).map_err(|_| {
                 ProviderError::CapabilityUnavailable("Codex config.toml is unreadable".into())
             })?;
@@ -207,18 +233,28 @@ pub(crate) fn verified_read_root(
                 })?
                 .sqlite_home
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(agentmender_provider_api::io_error(config, error)),
+        Err(ProviderError::CapabilityUnavailable(reason)) if reason == "source file missing" => {
+            None
+        }
+        Err(error) => return Err(error),
     };
     if let Some(sqlite_home) =
         configured.or_else(|| env::var_os("CODEX_SQLITE_HOME").map(PathBuf::from))
-        && !filesystem::Directory::open(&sqlite_home)
-            .is_ok_and(|sqlite| sqlite.item().identity == directory.item().identity)
     {
-        return Err(ProviderError::CapabilityUnavailable(
-            "the separate sqlite_home database could not be verified as part of this archive"
-                .into(),
-        ));
+        #[cfg(windows)]
+        let same_root = filesystem::Directory::open(&sqlite_home)
+            .is_ok_and(|sqlite| sqlite.item().identity == directory.item().identity);
+        #[cfg(target_os = "linux")]
+        let same_root = access(&sqlite_home) == Access::Accessible
+            && sqlite_home
+                .canonicalize()
+                .is_ok_and(|sqlite| sqlite == path);
+        if !same_root {
+            return Err(ProviderError::CapabilityUnavailable(
+                "the separate sqlite_home database could not be verified as part of this archive"
+                    .into(),
+            ));
+        }
     }
     Ok(path.to_owned())
 }

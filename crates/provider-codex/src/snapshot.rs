@@ -1,4 +1,4 @@
-//! Read-only bounded SQLite snapshots. Windows opens only a verified private copy.
+//! Read-only bounded SQLite snapshots. Linux and Windows open a verified private copy.
 use agentmender_provider_api::{ProviderError, filesystem};
 use rusqlite::{
     Connection, OpenFlags,
@@ -76,7 +76,7 @@ fn sha256(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn metadata_record(meta: &fs::Metadata, hash: String) -> FileRecord {
     use std::os::unix::fs::MetadataExt;
     FileRecord {
@@ -148,7 +148,7 @@ pub(super) fn fingerprints(root: &Path) -> Result<Vec<FileFingerprint>, Provider
     Ok(result)
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "linux", windows))]
 pub(super) fn fingerprints(root: &Path) -> Result<Vec<FileFingerprint>, ProviderError> {
     capture_files(root, None, Instant::now() + CAPTURE_TIME)
 }
@@ -300,13 +300,9 @@ pub(super) fn read_snapshot(
     backup_timeout: Option<Duration>,
 ) -> Result<Connection, ProviderError> {
     let deadline = backup_timeout.map_or(end, |timeout| end.min(Instant::now() + timeout));
-    #[cfg(windows)]
+    #[cfg(any(target_os = "linux", windows))]
     let private = {
-        let directory = filesystem::Directory::open(root)
-            .map_err(|_| unavailable("local Codex database root unavailable"))?;
-        let private = directory
-            .tempdir_outside("agentmender-codex-")
-            .map_err(|_| unavailable("private SQLite capture directory unavailable"))?;
+        let private = private_capture_directory(root)?;
         let before = capture_files(root, Some(private.path()), deadline)?;
         let after = capture_files(root, None, deadline)?;
         if fingerprints_changed(&before, &after) {
@@ -314,7 +310,7 @@ pub(super) fn read_snapshot(
         }
         private
     };
-    #[cfg(windows)]
+    #[cfg(any(target_os = "linux", windows))]
     let root = private.path();
     let source = open_provider_db(root)?;
     let mut memory = Connection::open_in_memory().map_err(sqlite_error)?;
@@ -324,22 +320,79 @@ pub(super) fn read_snapshot(
 }
 
 #[cfg(windows)]
+fn private_capture_directory(root: &Path) -> Result<tempfile::TempDir, ProviderError> {
+    let directory = filesystem::Directory::open(root)
+        .map_err(|_| unavailable("local Codex database root unavailable"))?;
+    directory
+        .tempdir_outside("agentmender-codex-")
+        .map_err(|_| unavailable("private SQLite capture directory unavailable"))
+}
+
+#[cfg(target_os = "linux")]
+fn private_capture_directory(root: &Path) -> Result<tempfile::TempDir, ProviderError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Use the system scratch directory even when TMPDIR points into the archive.
+    let base = Path::new("/tmp")
+        .canonicalize()
+        .map_err(|_| unavailable("private SQLite capture directory unavailable"))?;
+    if base.starts_with(root) {
+        return Err(unavailable(
+            "temporary directory overlaps the Codex archive",
+        ));
+    }
+    tempfile::Builder::new()
+        .prefix("agentmender-codex-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(base)
+        .map_err(|_| unavailable("private SQLite capture directory unavailable"))
+}
+
+#[cfg(target_os = "linux")]
+fn capture_metadata(file: &fs::File) -> std::io::Result<fs::Metadata> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(std::io::Error::other(
+            "source is not an unshared regular file",
+        ));
+    }
+    Ok(metadata)
+}
+
+#[cfg(any(target_os = "linux", windows))]
 fn capture_files(
     root: &Path,
     copy_to: Option<&Path>,
     deadline: Instant,
 ) -> Result<Vec<FileFingerprint>, ProviderError> {
-    use std::io::{ErrorKind, Read, Write};
+    use std::io::{Read, Write};
+    #[cfg(windows)]
     let directory = filesystem::Directory::open(root)
         .map_err(|_| unavailable("local Codex database root unavailable"))?;
+    #[cfg(windows)]
+    let open = |name| {
+        directory
+            .open_read(&directory.path().join(name))
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    unavailable("source file missing")
+                } else {
+                    unavailable("Codex SQLite file linked or unreadable")
+                }
+            })
+    };
+    #[cfg(target_os = "linux")]
+    let open = |name| filesystem::open_source_read(root, &root.join(name));
     let mut records = Vec::new();
     // SQLite rebuilds the WAL index in the private directory from the WAL.
     for name in [DB_NAME, "state_5.sqlite-wal"] {
         check_deadline(deadline)?;
-        let path = directory.path().join(name);
-        let mut file = match directory.open_read(&path) {
+        let mut file = match open(name) {
             Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::NotFound && name != DB_NAME => {
+            Err(ProviderError::CapabilityUnavailable(reason))
+                if reason == "source file missing" && name != DB_NAME =>
+            {
                 records.push(FileFingerprint {
                     name: name.into(),
                     record: None,
@@ -353,7 +406,15 @@ fn capture_files(
                 ));
             }
         };
-        let before = filesystem::Item::from_file(&file).map_err(|_| crate::worker::stale())?;
+        #[cfg(windows)]
+        let record = |file: &fs::File| {
+            filesystem::Item::from_file(file).map(|item| metadata_record(item, String::new()))
+        };
+        #[cfg(target_os = "linux")]
+        let record = |file: &fs::File| {
+            capture_metadata(file).map(|metadata| metadata_record(&metadata, String::new()))
+        };
+        let before = record(&file).map_err(|_| crate::worker::stale())?;
         if before.bytes > MAX_FILE_BYTES as u64 {
             return Err(unavailable("source fingerprint byte budget exceeded"));
         }
@@ -363,7 +424,7 @@ fn capture_files(
             .read_to_end(&mut bytes)
             .map_err(|_| crate::worker::stale())?;
         check_deadline(deadline)?;
-        let after = filesystem::Item::from_file(&file).map_err(|_| crate::worker::stale())?;
+        let mut after = record(&file).map_err(|_| crate::worker::stale())?;
         if bytes.len() as u64 != before.bytes || before != after {
             return Err(crate::worker::stale());
         }
@@ -372,9 +433,10 @@ fn capture_files(
                 .and_then(|mut file| file.write_all(&bytes))
                 .map_err(|_| unavailable("private SQLite capture write failed"))?;
         }
+        after.hash = sha256(&bytes);
         records.push(FileFingerprint {
             name: name.into(),
-            record: Some(metadata_record(after, sha256(&bytes))),
+            record: Some(after),
             stable_read: true,
         });
     }

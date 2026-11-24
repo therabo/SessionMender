@@ -18,9 +18,12 @@ pub fn directory(path: &Path) -> io::Result<File> {
 }
 
 /// Open a directory for reading without requesting read access to its ancestors.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn directory_with_search(path: &Path) -> io::Result<File> {
+    #[cfg(target_os = "macos")]
     let search = OFlags::from_bits_retain(libc::O_SEARCH as _);
+    #[cfg(target_os = "linux")]
+    let search = OFlags::PATH | OFlags::DIRECTORY;
     open_directory(path, search | OFlags::NOFOLLOW | OFlags::CLOEXEC)
 }
 

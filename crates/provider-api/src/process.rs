@@ -49,15 +49,32 @@ pub fn codex_delete(
         windows_executable(ProviderKind::Codex, executable).map_err(|error| error.to_string())?;
     #[cfg(windows)]
     let executable = &verified.path;
+    #[cfg(target_os = "linux")]
+    let mut command = linux_provider_command(executable).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
+    command
+        .args(["--tmpfs", "/tmp", "--bind"])
+        .arg(root)
+        .arg(root)
+        .args(["--setenv", "CODEX_HOME"])
+        .arg(root)
+        .args(["--setenv", "CODEX_SQLITE_HOME"])
+        .arg(root)
+        .arg("--chdir")
+        .arg(root)
+        .args(["--", "/provider"]);
+    #[cfg(not(target_os = "linux"))]
     let mut command = Command::new(executable);
     command
         .args(["-c", sqlite_override, "delete"])
         .arg(id.to_string())
         .arg("--force")
+        .stdin(Stdio::null());
+    #[cfg(not(target_os = "linux"))]
+    command
         .env("CODEX_HOME", root)
         .env("CODEX_SQLITE_HOME", root)
-        .current_dir(root)
-        .stdin(Stdio::null());
+        .current_dir(root);
     #[cfg(windows)]
     windows_environment(&mut command, root);
     let output = native_output(command)
@@ -306,8 +323,22 @@ pub fn codex_delete_version(executable: &Path) -> Result<String, ProviderError> 
             "native Windows Codex delete version not validated".into(),
         ));
     }
-    let help = windows_probe(&executable, &["delete", "--help"])?;
-    let help = String::from_utf8_lossy(&help);
+    require_codex_delete_help(&windows_probe(&executable, &["delete", "--help"])?)?;
+    Ok(version)
+}
+
+#[cfg(target_os = "linux")]
+pub fn codex_delete_version(executable: &Path) -> Result<String, ProviderError> {
+    let version = probe_version(ProviderKind::Codex, executable)?;
+    let mut command = linux_provider_command(executable)?;
+    command.args(["--chdir", "/", "--", "/provider", "delete", "--help"]);
+    require_codex_delete_help(&bounded_output(command, 16 * 1024)?)?;
+    Ok(version)
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn require_codex_delete_help(bytes: &[u8]) -> Result<(), ProviderError> {
+    let help = String::from_utf8_lossy(bytes);
     if !help
         .lines()
         .any(|line| line.starts_with("Usage: codex delete ") && line.contains("<SESSION>"))
@@ -317,7 +348,7 @@ pub fn codex_delete_version(executable: &Path) -> Result<String, ProviderError> 
             "native Codex delete --force unavailable".into(),
         ));
     }
-    Ok(version)
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,7 +415,7 @@ fn bounded_output(mut command: Command, limit: u64) -> Result<Vec<u8>, ProviderE
 }
 
 #[cfg(target_os = "linux")]
-fn linux_version_command(executable: &Path) -> Result<Command, ProviderError> {
+fn linux_provider_command(executable: &Path) -> Result<Command, ProviderError> {
     if !executable.is_absolute() {
         return Err(ProviderError::InvalidScope(
             "provider probe requires an absolute path".into(),
@@ -409,8 +440,6 @@ fn linux_version_command(executable: &Path) -> Result<Command, ProviderError> {
         "/dev",
         "--proc",
         "/proc",
-        "--chdir",
-        "/",
     ]);
     for system in ["/lib", "/lib64", "/bin"] {
         if Path::new(system).exists() {
@@ -420,7 +449,7 @@ fn linux_version_command(executable: &Path) -> Result<Command, ProviderError> {
     process
         .arg("--ro-bind")
         .arg(executable)
-        .args(["/provider", "--", "/provider"])
+        .arg("/provider")
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -435,7 +464,11 @@ pub fn probe_version(kind: ProviderKind, executable: &Path) -> Result<String, Pr
         #[cfg(target_os = "macos")]
         let mut process = command(executable)?;
         #[cfg(target_os = "linux")]
-        let mut process = linux_version_command(executable)?;
+        let mut process = {
+            let mut command = linux_provider_command(executable)?;
+            command.args(["--chdir", "/", "--", "/provider"]);
+            command
+        };
         process.arg("--version");
         let bytes = small_output(process)?;
         let text = std::str::from_utf8(&bytes).map_err(|_| {

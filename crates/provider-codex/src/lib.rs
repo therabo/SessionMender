@@ -1,35 +1,35 @@
 //! Codex inventory, bounded transcript previews and session removal.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod cleanup;
 #[cfg(any(target_os = "macos", windows))]
 mod desktop_reconciliation;
 pub mod discovery;
 pub mod exports;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod reader;
 mod removal;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod rollout_reader;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod snapshot;
 mod worker;
 
 use agentmender_domain::{Installation, ProviderKind};
 use agentmender_provider_api::{ProviderError, ProviderLocation, process, validate_location};
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 use std::process::Child;
 use std::{path::PathBuf, sync::Mutex};
 
 pub use removal::{Deletion, DeletionPlan};
 pub use worker::{TranscriptCursor, run_worker};
 
-pub const CONTENT_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
+pub const CONTENT_SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
 pub struct CodexAdapter {
     location: ProviderLocation,
-    #[cfg(not(windows))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     helper: PathBuf,
-    #[cfg(not(windows))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     home: PathBuf,
     connection: Mutex<Option<worker::Connection>>,
     deletion: Mutex<()>,
@@ -37,13 +37,13 @@ pub struct CodexAdapter {
 
 impl CodexAdapter {
     pub fn new(location: ProviderLocation, helper: PathBuf, home: PathBuf) -> Self {
-        #[cfg(windows)]
+        #[cfg(any(target_os = "linux", windows))]
         let _ = (helper, home);
         Self {
             location,
-            #[cfg(not(windows))]
+            #[cfg(not(any(target_os = "linux", windows)))]
             helper,
-            #[cfg(not(windows))]
+            #[cfg(not(any(target_os = "linux", windows)))]
             home,
             connection: Mutex::new(None),
             deletion: Mutex::new(()),
@@ -65,9 +65,9 @@ impl CodexAdapter {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 struct Guard(Child);
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "linux", windows)))]
 impl Drop for Guard {
     fn drop(&mut self) {
         let _ = self.0.kill();

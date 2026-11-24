@@ -1,4 +1,5 @@
 //! Remove auxiliary references after the native Codex command succeeds.
+#[cfg(any(target_os = "macos", windows))]
 use crate::desktop_reconciliation;
 use agentmender_provider_api::rewrite::{self, directory};
 use serde_json::Value;
@@ -49,6 +50,7 @@ pub(super) fn after_native_delete(root: &Path, id: Uuid) -> Vec<String> {
                 }
             }
 
+            #[cfg(any(target_os = "macos", windows))]
             desktop_reconciliation::remove_local_thread(root, &id, &mut errors);
         }
         Err(error) => errors.push(format!("Codex archive: {error}")),
