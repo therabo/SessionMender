@@ -397,11 +397,7 @@ pub(super) struct Configuration {
 
 pub(super) fn run(config: Configuration) -> Result<(), String> {
     let error = str::to_owned;
-    if INDEX.is_empty() || SCRIPT.is_empty() || STYLES.is_empty() {
-        return Err(error(
-            "UI assets are missing. Run npm ci and npm run build in ui/, then rebuild SessionMender.",
-        ));
-    }
+    let shutdown = launcher_shutdown()?;
     let launch = token().map_err(|_| error("Unable to create a local authorization ticket."))?;
     let bearer = token().map_err(|_| error("Unable to create a local browser session."))?;
     let clawd_model = model_asset::load_clawd();
@@ -448,8 +444,31 @@ pub(super) fn run(config: Configuration) -> Result<(), String> {
             eprintln!("Open the local URL printed above in your browser.");
         }
         axum::serve(listener, router(app))
+            .with_graceful_shutdown(async move {
+                match shutdown {
+                    Some(receiver) => {
+                        let _ = receiver.await;
+                    }
+                    None => std::future::pending().await,
+                }
+            })
             .await
             .map_err(|_| error("The local HTTP server stopped unexpectedly."))?;
         Ok(())
     })
+}
+
+fn launcher_shutdown() -> Result<Option<tokio::sync::oneshot::Receiver<()>>, String> {
+    if std::env::var("SESSIONMENDER_SHUTDOWN_ON_STDIN_EOF").as_deref() != Ok("1") {
+        return Ok(None);
+    }
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("launcher-shutdown".into())
+        .spawn(move || {
+            let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+            let _ = sender.send(());
+        })
+        .map_err(|error| format!("Unable to monitor the launcher: {error}"))?;
+    Ok(Some(receiver))
 }

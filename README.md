@@ -26,16 +26,43 @@ On Windows, Exports also lists entries from `export` and `exports` in the select
 
 ## Build and run locally
 
-Install Rust 1.89 or later with Cargo and Node.js 22 with npm. Bundled SQLite and Zstandard require a C compiler on macOS and Windows. On Windows, install Visual Studio Build Tools with the Desktop development with C++ workload and a Windows SDK, then use an MSVC Rust toolchain matching your architecture. From the repository root, build the React frontend first so Cargo can embed it in the executable.
+### Quick Start
+
+Install Node.js 20.19 or later in the 20.x series, or 22.12 or later, with npm. Install Rust 1.89 or later with Cargo and the native compiler tools for your platform. The first launch needs access to the npm and Cargo registries unless both caches are already populated.
+
+| Platform | Native compiler tools |
+| --- | --- |
+| macOS (Apple Silicon and Intel) | Xcode Command Line Tools (`xcode-select --install`) or Xcode with Clang and the macOS SDK. |
+| Windows (x64 and ARM64) | Visual Studio Build Tools with the **Desktop development with C++** workload, a Windows SDK, and the MSVC tools for your architecture. Use the matching MSVC Rust toolchain. |
+| Linux (x64 and ARM64) | A C/C++ toolchain and linker, such as GCC from `build-essential` on Debian or Ubuntu. For automatic browser launch, use a graphical session with `xdg-open` available. |
+
+From the repository root, run:
+
+```sh
+npm start
+```
+
+The first launch installs the locked frontend dependencies, builds the frontend, and compiles and starts the Rust backend. The backend serves the embedded frontend on IPv4 loopback and opens your default browser. Later launches reuse the frontend dependencies and build when their contents still match. Cargo rebuilds any affected Rust targets. Press **Ctrl+C** in the launch terminal to stop SessionMender.
+
+Run `npm start -- ui --no-open` to print a private launch URL for manual opening. Run `npm start -- ui --browser-executable "/absolute/path/to/browser"` to use a specific browser, or `npm start -- --help` to see the global options. Use an absolute path in the format of your operating system.
+
+- If Node or Cargo is missing or too old, check `node --version`, `npm --version`, and `rustc --version` in the launch terminal.
+- If Cargo reports a missing linker, compiler, or SDK, install the native compiler tools listed above. On Windows, check that the Rust and MSVC toolchains target the same architecture.
+- If `npm ci` reports a lockfile mismatch, restore or update `ui/package.json` and `ui/package-lock.json` together. For download errors, check access to the configured registries and retry.
+- If Cargo reports a missing embedded asset, run `npm start` to regenerate the frontend. If the launcher reports an existing startup lock, wait for preparation to finish. After a forced termination, remove the reported lock file once you have verified that its launcher has exited.
+
+### Manual build with Cargo
+
+From the repository root, build the React frontend first so Cargo can embed it in the executable.
 
 ```sh
 npm ci --prefix ui
 npm run build --prefix ui
 cargo build --locked --workspace
-./target/debug/agentmender ui
+cargo run --locked --package agentmender
 ```
 
-On Windows, launch `target\debug\agentmender.exe ui`. The app serves the UI on IPv4 loopback and opens your default browser. Use `ui --no-open` to print the private launch URL or `--help` to see the options for selecting archives and executables.
+You can also run `cargo run --locked --package agentmender -- ui` or launch the built binary as `./target/debug/agentmender ui` on macOS and Linux or `target\debug\agentmender.exe ui` on Windows. Put UI options such as `ui --no-open` after Cargo's `--` separator.
 
 To launch directly in Google Chrome on Windows, run `scripts\sessionmender-chrome.cmd` from File Explorer or a Desktop shortcut. Keep the launcher window open while using SessionMender. Codex Desktop can be closed.
 
@@ -45,7 +72,7 @@ If a completed deletion left a Desktop catalog entry, run `target\debug\agentmen
 
 The native Windows x64 Codex CLI `0.171.0-alpha.13` from the Codex MSIX package was exercised directly with disposable databases and workspaces. It removed active JSONL, archived JSONL, and archived Zstandard rollouts and their SQLite rows. The Windows API and Chrome suite passed locally on Windows 11 x64 with that Codex version, a Claude Code JSONL fixture with version metadata `2.1.0`, a Desktop SQLite catalog fixture, and export fixtures. The CI matrix includes the suite on Windows x64 and ARM64. Windows ARM64 results are still pending. A Windows host that blocks locally built binaries cannot run the backend suite or the Rust tests there.
 
-To run the suite on Windows, build the app, set `SESSIONMENDER_TEST_CODEX` to that version of the native `codex.exe`, and set `SESSIONMENDER_TEST_CHROMIUM` to Edge or Chromium. Run `cargo test --locked --workspace` and `npm run test:windows --prefix ui`. The suite uses temporary roots for destructive operations.
+To run the suite on Windows, use Node.js 22.12 or later, build the app, set `SESSIONMENDER_TEST_CODEX` to that version of the native `codex.exe`, and set `SESSIONMENDER_TEST_CHROMIUM` to Edge or Chromium. Run `cargo test --locked --workspace` and `npm run test:windows --prefix ui`. The suite uses temporary roots for destructive operations.
 
 For distribution to Windows PCs with Smart App Control enabled, Authenticode signing with a trusted code-signing certificate and signature verification are separate release steps. [Microsoft Smart App Control signing guidance](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)
 

@@ -4,16 +4,21 @@ fn main() {
     let dist = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"))
         .join("../../ui/dist");
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("build output directory"));
-    // Embed the built frontend. The UI command reports missing assets at launch.
+    // The directory watch also covers asset additions and removals. The launcher
+    // supplies a content hash so Cargo can detect changes with preserved mtimes.
+    println!("cargo:rerun-if-changed={}", dist.display());
+    println!("cargo:rerun-if-env-changed=SESSIONMENDER_UI_FINGERPRINT");
     for asset in ["index.html", "app.js", "app.css"] {
         let path = dist.join(asset);
-        println!("cargo:rerun-if-changed={}", path.display());
-        let bytes = fs::read(path).unwrap_or_default();
-        fs::write(out.join(asset), bytes).expect("write embedded UI asset");
+        let contents = fs::read_to_string(&path)
+            .unwrap_or_else(|error| missing_asset(&path, &error.to_string()));
+        if contents.is_empty() {
+            missing_asset(&path, "file is empty");
+        }
+        fs::write(out.join(asset), contents).expect("write embedded UI asset");
     }
 
     let assets = dist.join("assets");
-    println!("cargo:rerun-if-changed={}", assets.display());
     let mut entries = match fs::read_dir(assets) {
         Ok(entries) => entries
             .map(|entry| entry.expect("read UI asset directory").path())
@@ -48,4 +53,11 @@ fn main() {
     }
     lookup.push_str("        _ => None,\n    }\n}\n");
     fs::write(out.join("embedded_assets.rs"), lookup).expect("write embedded asset lookup");
+}
+
+fn missing_asset(path: &std::path::Path, reason: &str) -> ! {
+    panic!(
+        "Required frontend asset {} is unavailable ({reason}). From the repository root, run `npm ci --prefix ui` and `npm run build --prefix ui`, then retry Cargo. Use `npm start` to build and launch in one step.",
+        path.display()
+    );
 }

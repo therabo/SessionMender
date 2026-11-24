@@ -36,12 +36,12 @@ struct Args {
     #[arg(long, global = true, default_value_t = 10_000, value_parser = clap::value_parser!(u32).range(1..=100_000))]
     max_entries: u32,
     #[command(subcommand)]
-    command: Action,
+    command: Option<Action>,
 }
 
 #[derive(Subcommand)]
 enum Action {
-    /// Open the local session manager in a browser.
+    /// Open the local session manager in a browser (default).
     Ui {
         /// Print the launch URL for manual opening.
         #[arg(long)]
@@ -264,28 +264,23 @@ fn run(args: Args) -> Result<(), String> {
         args.codex_executable.clone(),
     )?;
     let codex = CodexAdapter::new(discovery.location.clone(), helper, home.clone());
-    #[cfg(not(windows))]
-    let Action::Ui {
-        no_open,
-        ref browser_executable,
-    } = args.command;
-    #[cfg(windows)]
-    let (no_open, browser_executable) = match args.command {
-        Action::Ui {
+    let (no_open, browser_executable) = match &args.command {
+        None => (false, None),
+        Some(Action::Ui {
             no_open,
-            ref browser_executable,
-        } => (no_open, browser_executable),
+            browser_executable,
+        }) => (*no_open, browser_executable.clone()),
         #[cfg(windows)]
-        Action::ReconcileDesktop {
+        Some(Action::ReconcileDesktop {
             confirm: true,
-            ref sessions,
-        } => {
+            sessions,
+        }) => {
             codex.reconcile_removed_desktop_sessions(sessions, &args.protect_codex_session)?;
             println!("Verified Codex Desktop catalog entries reconciled.");
             return Ok(());
         }
         #[cfg(windows)]
-        Action::ReconcileDesktop { confirm: false, .. } => {
+        Some(Action::ReconcileDesktop { confirm: false, .. }) => {
             return Err("Pass --confirm to reconcile the specified Desktop entries.".into());
         }
     };
@@ -298,7 +293,7 @@ fn run(args: Args) -> Result<(), String> {
         limit: args.max_entries as usize,
         protected: args.protect_codex_session,
         no_open,
-        browser_executable: browser_executable.clone(),
+        browser_executable,
     })
 }
 

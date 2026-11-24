@@ -1,0 +1,11 @@
+{
+  "name": "sessionmender",
+  "private": true,
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "test:startup": "node --test scripts/start.test.mjs"
+  }
+}
