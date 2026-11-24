@@ -132,16 +132,13 @@ For distribution to Windows PCs with Smart App Control enabled, Authenticode sig
 
 The build includes the Codex model from `ui/public/assets/codex.glb`. The standard launch command uses this model automatically.
 
-The optional Claude Code preview uses `assets/Clawd-Animator.glb` from [Clawd Little Worlds at `aefeaa7`](https://github.com/leonvanzyl/clawd-little-worlds/tree/aefeaa7f6a9c8126338c7da5b975371a0bb28f04). Keep this model for local evaluation while its redistribution terms are unclear. The loopback server checks its GLB header and accepts files up to 16 MiB.
+The optional Claude Code preview uses `ui/public/assets/Clawd-Animator.glb` from [Leon van Zyl's Clawd Little Worlds at `aefeaa7`](https://github.com/leonvanzyl/clawd-little-worlds/tree/aefeaa7f6a9c8126338c7da5b975371a0bb28f04). The model is included with permission. Run the following command from the checkout to enable the preview.
 
 ```sh
-mkdir -p ui/.local
-curl --fail --location --output ui/.local/Clawd-Animator.glb \
-  https://raw.githubusercontent.com/leonvanzyl/clawd-little-worlds/aefeaa7f6a9c8126338c7da5b975371a0bb28f04/assets/Clawd-Animator.glb
-SESSIONMENDER_CLAWD_GLB="$PWD/ui/.local/Clawd-Animator.glb" session-mender
+SESSIONMENDER_CLAWD_GLB="$PWD/ui/public/assets/Clawd-Animator.glb" session-mender
 ```
 
-The Claude Code GLB is read at launch from the configured local path. Three.js loads on demand and shares the renderer setup and motion simulation across the two provider configurations. During a switch, the outgoing canvas pauses and fades before the next context is created. The original provider background is used when its model or WebGL2 is unavailable.
+The backend reads the configured GLB at launch, checks its header, and accepts files up to 16 MiB. Three.js loads on demand and shares the renderer setup and motion simulation across the two provider configurations. During a switch, the outgoing canvas pauses and fades before the next context is created. The original provider background is used when its model or WebGL2 is unavailable.
 
 Run `npm run test:background --prefix ui` for the scene configuration and model-fit tests. With `SESSIONMENDER_CLAWD_GLB` set and the app built, run `npm run test:background:browser --prefix ui` for the browser tests. On macOS the browser tests use the standard Google Chrome installation. Set `SESSIONMENDER_TEST_CHROMIUM` to the executable for another Chromium installation.
 
