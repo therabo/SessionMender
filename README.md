@@ -24,11 +24,11 @@ Inventory and transcript coverage depend on the archive format, available metada
 
 On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Workspace exports can be removed through the same review and confirmation flow as other export groups.
 
-## Build and run locally
+## Quick Start
 
-### Quick Start
+### Install from source
 
-Install Node.js 20.19 or later in the 20.x series, or 22.12 or later, with npm. Install Rust 1.89 or later with Cargo and the native compiler tools for your platform. The first launch needs access to the npm and Cargo registries unless both caches are already populated.
+Install Git and Node.js 20.19 or later in the 20.x series, or 22.12 or later, with npm. Building from source also requires Rust 1.89 or later with Cargo and the native compiler tools for your platform. Installation needs access to the npm and Cargo registries unless both caches are already populated.
 
 | Platform | Native compiler tools |
 | --- | --- |
@@ -36,20 +36,67 @@ Install Node.js 20.19 or later in the 20.x series, or 22.12 or later, with npm. 
 | Windows (x64 and ARM64) | Visual Studio Build Tools with the **Desktop development with C++** workload, a Windows SDK, and the MSVC tools for your architecture. Use the matching MSVC Rust toolchain. |
 | Linux (x64 and ARM64) | A C/C++ toolchain and linker, such as GCC from `build-essential` on Debian or Ubuntu. For automatic browser launch, use a graphical session with `xdg-open` available. |
 
-From the repository root, run:
+```sh
+git clone https://github.com/therabo/SessionMender.git
+cd SessionMender
+npm install -g .
+```
+
+npm runs the build during installation and registers `session-mender` in its global command directory. npm normally links a local checkout when installing it globally, so keep the checkout in place. If you move it, run `npm install -g .` again from the new location. If the command is unavailable, check `npm prefix -g` and your PATH. npm places commands under the prefix's `bin` directory on macOS and Linux and directly under the prefix on Windows.
+
+### Run SessionMender
+
+From any directory, run:
+
+```sh
+session-mender
+```
+
+The launcher runs the installed executable directly. The backend serves the embedded frontend on IPv4 loopback and opens your default browser. Everyday launch works offline and needs Node.js. npm, Cargo and the compiler tools are used during installation and development. Press **Ctrl+C** in the terminal to stop SessionMender.
+
+```sh
+session-mender --help
+session-mender --version
+session-mender ui --no-open
+session-mender ui --browser-executable "/absolute/path/to/browser"
+```
+
+Use `ui --no-open` to print the private launch URL for manual opening. Use your operating system's absolute path format for the browser executable.
+
+### Update or uninstall
+
+From the checkout, update the source and reinstall.
+
+```sh
+git pull
+npm install -g .
+```
+
+Uninstall the global command from any directory.
+
+```sh
+npm uninstall -g session-mender
+```
+
+For a linked installation, npm removes its global links and leaves the checkout, its build outputs, and your provider data in place.
+
+## Development
+
+Run this command from the repository root.
 
 ```sh
 npm start
 ```
 
-The first launch installs the locked frontend dependencies, builds the frontend, and compiles and starts the Rust backend. The backend serves the embedded frontend on IPv4 loopback and opens your default browser. Later launches reuse the frontend dependencies and build when their contents still match. Cargo rebuilds any affected Rust targets. Press **Ctrl+C** in the launch terminal to stop SessionMender.
+The development launcher prepares the frontend and uses Cargo to compile and run the backend. Subsequent launches reuse frontend dependencies and build output when their contents match. Cargo rebuilds affected Rust targets.
 
 Run `npm start -- ui --no-open` to print a private launch URL for manual opening. Run `npm start -- ui --browser-executable "/absolute/path/to/browser"` to use a specific browser, or `npm start -- --help` to see the global options. Use an absolute path in the format of your operating system.
 
 - If Node or Cargo is missing or too old, check `node --version`, `npm --version`, and `rustc --version` in the launch terminal.
 - If Cargo reports a missing linker, compiler, or SDK, install the native compiler tools listed above. On Windows, check that the Rust and MSVC toolchains target the same architecture.
 - If `npm ci` reports a lockfile mismatch, restore or update `ui/package.json` and `ui/package-lock.json` together. For download errors, check access to the configured registries and retry.
-- If Cargo reports a missing embedded asset, run `npm start` to regenerate the frontend. If the launcher reports an existing startup lock, wait for preparation to finish. After a forced termination, remove the reported lock file once you have verified that its launcher has exited.
+- If the installed executable is missing, reinstall from the checkout. Ensure npm lifecycle scripts are enabled. Add `--foreground-scripts` to the install command to see build output.
+- If Cargo reports a missing embedded asset, run `npm start` to regenerate the frontend. If another build holds the startup lock, wait for it to finish. After a forced termination, remove the reported lock file once you have verified that its launcher has exited.
 
 ### Manual build with Cargo
 
@@ -64,9 +111,9 @@ cargo run --locked --package agentmender
 
 You can also run `cargo run --locked --package agentmender -- ui` or launch the built binary as `./target/debug/agentmender ui` on macOS and Linux or `target\debug\agentmender.exe ui` on Windows. Put UI options such as `ui --no-open` after Cargo's `--` separator.
 
-To launch directly in Google Chrome on Windows, run `scripts\sessionmender-chrome.cmd` from File Explorer or a Desktop shortcut. Keep the launcher window open while using SessionMender. Codex Desktop can be closed.
+For a Windows File Explorer or Desktop shortcut that finds Chrome automatically, build the app in debug mode and run `scripts\sessionmender-chrome.cmd`. Keep the launcher window open while using SessionMender. Codex Desktop can be closed.
 
-If a completed deletion left a Desktop catalog entry, run `target\debug\agentmender.exe reconcile-desktop --confirm <UUID>`. Pass only the UUIDs from the earlier deletion result. The command checks that each UUID is absent from the selected Codex archive before reconciling its local Desktop entry. Use the same `--codex-root` override as the original operation if applicable.
+If a completed deletion left a Desktop catalog entry, run `session-mender reconcile-desktop --confirm <UUID>` on Windows. Pass only the UUIDs from the earlier deletion result. The command checks that each UUID is absent from the selected Codex archive before reconciling its local Desktop entry. Use the same `--codex-root` override as the original operation if applicable.
 
 ### Windows verification and release
 
@@ -86,7 +133,7 @@ The optional Claude Code preview uses `assets/Clawd-Animator.glb` from [Clawd Li
 mkdir -p ui/.local
 curl --fail --location --output ui/.local/Clawd-Animator.glb \
   https://raw.githubusercontent.com/leonvanzyl/clawd-little-worlds/aefeaa7f6a9c8126338c7da5b975371a0bb28f04/assets/Clawd-Animator.glb
-SESSIONMENDER_CLAWD_GLB="$PWD/ui/.local/Clawd-Animator.glb" ./target/debug/agentmender ui
+SESSIONMENDER_CLAWD_GLB="$PWD/ui/.local/Clawd-Animator.glb" session-mender
 ```
 
 The Claude Code GLB is read at launch from the configured local path. Three.js loads on demand and shares the renderer setup and motion simulation across the two provider configurations. During a switch, the outgoing canvas pauses and fades before the next context is created. The original provider background is used when its model or WebGL2 is unavailable.

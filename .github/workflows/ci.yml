@@ -19,6 +19,9 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: npm run test:install
+        env:
+          RUSTUP_TOOLCHAIN: stable
       - run: npm run test:startup
         env:
           RUSTUP_TOOLCHAIN: stable
