@@ -1,45 +1,28 @@
-# SessionMender
+<p align="center">
+  <img src="docs/readme/assets/logo.png" alt="SessionMender logo" width="77">
+</p>
 
-SessionMender is a local browser app for browsing and cleaning up Codex and Claude Code sessions. It brings conversations, projects, and storage into one place so you can find old work and review what a cleanup would remove.
+<h1 align="center">SessionMender</h1>
 
-## Features
+### How it works
 
-- Discover local installations and archives. Search and filter main conversations by project, activity, state, and size, then open their transcripts.
-- Review a Codex session and its verified descendants before deleting the tree. Where project membership is complete, delete a registered project's sessions in bulk while keeping the project and workspace. After native deletion, SessionMender cleans up scoped history, indexes, and recognized Codex Desktop catalog entries.
-- Review and delete a Claude Code session, including verified session files, checkpoints, and matching shared history entries.
-- Use Storage Manager to inspect Claude Code disk usage and review individual Codex export and backup groups before removing them.
+SessionMender is a local application for managing and cleaning up Codex and Claude Code sessions through a unified browser-based interface.
 
-## Platform support
+It automatically finds your local sessions and lets you easily search, filter, and preview conversations to decide what to keep or delete.
 
-| Capability | macOS | Linux | Windows |
-| --- | --- | --- | --- |
-| Codex installation, archive, and export inventory | Yes | Yes | Yes |
-| Codex projects, sessions, and transcripts | Yes | Yes | Verified on Windows 11 x64 |
-| Codex descendant review | Yes | Yes | Verified on Windows 11 x64 |
-| Codex session and project-session deletion, with local reference cleanup | Requires a supported native Codex executable | Requires Bubblewrap and a native Codex executable with `delete --force` | Requires native Codex `0.171.0-alpha.13`. Verified on Windows 11 x64. |
-| Codex export deletion | Yes | Yes, with `openat2` required for directories | Verified on Windows 11 x64 |
-| Claude Code projects, sessions, transcripts, and storage | Yes | Yes | Yes |
-| Claude Code session deletion | Yes | Unavailable | Verified on Windows 11 x64 with a JSONL fixture |
+This helps you free up disk space and keep your workspace organized.
 
-Inventory and transcript coverage depend on the archive format, available metadata, and filesystem access. On Linux and Windows, the Codex reader uses a verified private copy of `state_5.sqlite` and its WAL. The app reports a separate `sqlite_home` as unavailable when it cannot verify its association with the session root. Protected descendants, changed previews, active export leases, incomplete export groups, and Windows reparse points can make individual operations unavailable. On Windows, recognized Desktop catalogs in WAL mode are updated in a SQLite transaction. A busy writer or unrecognized schema is reported as incomplete cleanup.
+<p align="center">
+  <img src="docs/readme/assets/codex.png" alt="SessionMender with Codex selected" width="80%">
+</p>
 
-On Windows, Exports also lists entries from `export` and `exports` in the selected Codex workspace. SessionMender uses `desktop.workspace-root` when configured, or `Codex` inside the current user's Windows Documents folder. Restart SessionMender after creating either folder. Workspace exports can be removed through the same review and confirmation flow as other export groups.
+<p align="center">
+  <img src="docs/readme/assets/claude.png" alt="SessionMender with Claude Code selected" width="80%">
+</p>
 
-On Linux, Exports looks for `exports` in the selected Codex archive (`~/.codex/exports` by default). SessionMender does not create that directory. Set `ARTIFACT_SESSION_HOST_EXPORT_ROOT` to an absolute path before launch to include a separate export directory.
+## Install
 
-On Linux, Bubblewrap (`/usr/bin/bwrap`) runs native deletion with write access to the selected archive and private scratch space. After verifying removal, SessionMender cleans matching local history, index, and JSON state entries. Desktop SQLite catalog reconciliation is available on macOS and Windows.
-
-## Quick Start
-
-### Install from source
-
-Install Git and Node.js 20.19 or later in the 20.x series, or 22.12 or later, with npm. Building from source also requires Rust 1.89 or later with Cargo and the native compiler tools for your platform. Installation needs access to the npm and Cargo registries unless both caches are already populated.
-
-| Platform | Native compiler tools |
-| --- | --- |
-| macOS (Apple Silicon and Intel) | Xcode Command Line Tools (`xcode-select --install`) or Xcode with Clang and the macOS SDK. |
-| Windows (x64 and ARM64) | Visual Studio Build Tools with the **Desktop development with C++** workload, a Windows SDK, and the MSVC tools for your architecture. Use the matching MSVC Rust toolchain. |
-| Linux (x64 and ARM64) | A C/C++ toolchain and linker, such as GCC from `build-essential` on Debian or Ubuntu. For automatic browser launch, use a graphical session with `xdg-open` available. |
+Clone the repository and install SessionMender globally.
 
 ```sh
 git clone https://github.com/therabo/SessionMender.git
@@ -47,103 +30,8 @@ cd SessionMender
 npm install -g .
 ```
 
-npm runs the build during installation and registers `session-mender` in its global command directory. npm normally links a local checkout when installing it globally, so keep the checkout in place. If you move it, run `npm install -g .` again from the new location. If the command is unavailable, check `npm prefix -g` and your PATH. npm places commands under the prefix's `bin` directory on macOS and Linux and directly under the prefix on Windows.
-
-### Run SessionMender
-
-From any directory, run:
+Launch SessionMender from any directory.
 
 ```sh
 session-mender
 ```
-
-The launcher runs the installed executable directly. The backend serves the embedded frontend on IPv4 loopback and opens your default browser. Everyday launch works offline and needs Node.js. npm, Cargo and the compiler tools are used during installation and development. Press **Ctrl+C** in the terminal to stop SessionMender.
-
-```sh
-session-mender --help
-session-mender --version
-session-mender ui --no-open
-session-mender ui --browser-executable "/absolute/path/to/browser"
-```
-
-Use `ui --no-open` to print the private launch URL for manual opening. Use your operating system's absolute path format for the browser executable.
-
-### Update or uninstall
-
-From the checkout, update the source and reinstall.
-
-```sh
-git pull
-npm install -g .
-```
-
-Uninstall the global command from any directory.
-
-```sh
-npm uninstall -g session-mender
-```
-
-For a linked installation, npm removes its global links and leaves the checkout, its build outputs, and your provider data in place.
-
-## Development
-
-Run this command from the repository root.
-
-```sh
-npm start
-```
-
-The development launcher prepares the frontend and uses Cargo to compile and run the backend. Subsequent launches reuse frontend dependencies and build output when their contents match. Cargo rebuilds affected Rust targets.
-
-Run `npm start -- ui --no-open` to print a private launch URL for manual opening. Run `npm start -- ui --browser-executable "/absolute/path/to/browser"` to use a specific browser, or `npm start -- --help` to see the global options. Use an absolute path in the format of your operating system.
-
-- If Node or Cargo is missing or too old, check `node --version`, `npm --version`, and `rustc --version` in the launch terminal.
-- If Cargo reports a missing linker, compiler, or SDK, install the native compiler tools listed above. On Windows, check that the Rust and MSVC toolchains target the same architecture.
-- If `npm ci` reports a lockfile mismatch, restore or update `ui/package.json` and `ui/package-lock.json` together. For download errors, check access to the configured registries and retry.
-- If the installed executable is missing, reinstall from the checkout. Ensure npm lifecycle scripts are enabled. Add `--foreground-scripts` to the install command to see build output.
-- If Cargo reports a missing embedded asset, run `npm start` to regenerate the frontend. If another build holds the startup lock, wait for it to finish. After a forced termination, remove the reported lock file once you have verified that its launcher has exited.
-
-### Manual build with Cargo
-
-From the repository root, build the React frontend first so Cargo can embed it in the executable.
-
-```sh
-npm ci --prefix ui
-npm run build --prefix ui
-cargo build --locked --workspace
-cargo run --locked --package agentmender
-```
-
-You can also run `cargo run --locked --package agentmender -- ui` or launch the built binary as `./target/debug/agentmender ui` on macOS and Linux or `target\debug\agentmender.exe ui` on Windows. Put UI options such as `ui --no-open` after Cargo's `--` separator.
-
-For a Windows File Explorer or Desktop shortcut that finds Chrome automatically, build the app in debug mode and run `scripts\sessionmender-chrome.cmd`. Keep the launcher window open while using SessionMender. Codex Desktop can be closed.
-
-If a completed deletion left a Desktop catalog entry, run `session-mender reconcile-desktop --confirm <UUID>` on Windows. Pass only the UUIDs from the earlier deletion result. The command checks that each UUID is absent from the selected Codex archive before reconciling its local Desktop entry. Use the same `--codex-root` override as the original operation if applicable.
-
-### Windows verification and release
-
-The native Windows x64 Codex CLI `0.171.0-alpha.13` from the Codex MSIX package was exercised directly with disposable databases and workspaces. It removed active JSONL, archived JSONL, and archived Zstandard rollouts and their SQLite rows. The Windows API and Chrome suite passed locally on Windows 11 x64 with that Codex version, a Claude Code JSONL fixture with version metadata `2.1.0`, a Desktop SQLite catalog fixture, and export fixtures. The CI matrix includes the suite on Windows x64 and ARM64. Windows ARM64 results are still pending. A Windows host that blocks locally built binaries cannot run the backend suite or the Rust tests there.
-
-To run the suite on Windows, use Node.js 22.12 or later, build the app, set `SESSIONMENDER_TEST_CODEX` to that version of the native `codex.exe`, and set `SESSIONMENDER_TEST_CHROMIUM` to Edge or Chromium. Run `cargo test --locked --workspace` and `npm run test:windows --prefix ui`. The suite uses temporary roots for destructive operations.
-
-For distribution to Windows PCs with Smart App Control enabled, Authenticode signing with a trusted code-signing certificate and signature verification are separate release steps. [Microsoft Smart App Control signing guidance](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)
-
-### 3D backgrounds
-
-The build includes the Codex model from `ui/public/assets/codex.glb`. The standard launch command uses this model automatically.
-
-The optional Claude Code preview uses `ui/public/assets/Clawd-Animator.glb` from [Leon van Zyl's Clawd Little Worlds at `aefeaa7`](https://github.com/leonvanzyl/clawd-little-worlds/tree/aefeaa7f6a9c8126338c7da5b975371a0bb28f04). The model is included with permission. Run the following command from the checkout to enable the preview.
-
-```sh
-SESSIONMENDER_CLAWD_GLB="$PWD/ui/public/assets/Clawd-Animator.glb" session-mender
-```
-
-The backend reads the configured GLB at launch, checks its header, and accepts files up to 16 MiB. Three.js loads on demand and shares the renderer setup and motion simulation across the two provider configurations. During a switch, the outgoing canvas pauses and fades before the next context is created. The original provider background is used when its model or WebGL2 is unavailable.
-
-Run `npm run test:background --prefix ui` for the scene configuration and model-fit tests. With `SESSIONMENDER_CLAWD_GLB` set and the app built, run `npm run test:background:browser --prefix ui` for the browser tests. On macOS the browser tests use the standard Google Chrome installation. Set `SESSIONMENDER_TEST_CHROMIUM` to the executable for another Chromium installation.
-
-## Permanent deletion
-
-SessionMender requires an explicit confirmation before deleting sessions or exports. **Deletion is permanent. No backups are created.** Review the affected items before confirming. A cleanup can partially succeed if files change or become inaccessible. The result reports failures and the inventory refreshes after the attempt.
-
-On macOS and Linux, export removal unlinks symbolic links and hard-link entries by name. Files and hard-link entries outside the selected groups are preserved.
