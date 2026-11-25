@@ -13,11 +13,11 @@ It automatically finds your local sessions and lets you easily search, filter, a
 This helps you free up disk space and keep your workspace organized.
 
 <p align="center">
-  <img src="docs/readme/assets/codex.png" alt="SessionMender with Codex selected" width="80%">
+  <img src="docs/readme/assets/codex.png" alt="SessionMender with Codex selected" width="100%">
 </p>
 
 <p align="center">
-  <img src="docs/readme/assets/claude.png" alt="SessionMender with Claude Code selected" width="80%">
+  <img src="docs/readme/assets/claude.png" alt="SessionMender with Claude Code selected" width="100%">
 </p>
 
 ## Install
